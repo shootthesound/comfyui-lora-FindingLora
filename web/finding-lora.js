@@ -450,7 +450,15 @@ function refreshNodeUI(node) {
 //   label as the friendly displayed name "Bookmarks".
 // - The trigger display is a hand-rolled widget object pushed directly to
 //   `node.widgets` so it has no label rendered at all.
+//
+// Important: the `wh` argument LiteGraph passes to widget.draw() is
+// LiteGraph.NODE_WIDGET_HEIGHT (a fixed constant, ~20), NOT the slot
+// height we returned from computeSize. So drawing `fillRect(..., wh - 4)`
+// gives a 16px-tall rect inside whatever slot we actually got. Use the
+// SLOT_H constant below instead to fill the slot we asked for.
 // =====================================================================
+
+const SLOT_H = 30;
 
 function createBookmarkWidget(node) {
     // Custom-type clickable widget (no native combo dropdown). Click opens
@@ -467,19 +475,20 @@ function createBookmarkWidget(node) {
         options: {},
         _finding_role: "bookmark_combo",
 
-        draw(ctx, n, ww, y, wh) {
+        draw(ctx, n, ww, y, _wh) {
+            const h = SLOT_H;
             ctx.fillStyle = "#1f2630";
-            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.fillRect(8, y + 2, ww - 16, h - 4);
             ctx.strokeStyle = "#3a4a5a";
             ctx.lineWidth = 1;
-            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, h - 5);
 
             const labelText = "📚 Bookmarks:";
             ctx.fillStyle = "#aab";
             ctx.font = "11px Arial";
             ctx.textBaseline = "middle";
             ctx.textAlign = "left";
-            ctx.fillText(labelText, 14, y + wh / 2);
+            ctx.fillText(labelText, 14, y + h / 2);
 
             const labelW = ctx.measureText(labelText).width + 8;
             const arrowW = 16;
@@ -494,16 +503,16 @@ function createBookmarkWidget(node) {
                 display = display.slice(0, -1);
             }
             if (display !== orig) display += "…";
-            ctx.fillText(display, valueX, y + wh / 2);
+            ctx.fillText(display, valueX, y + h / 2);
 
             ctx.fillStyle = "#88a";
             ctx.font = "12px Arial";
             ctx.textAlign = "right";
-            ctx.fillText("▾", ww - 14, y + wh / 2);
+            ctx.fillText("▾", ww - 14, y + h / 2);
         },
 
         computeSize() {
-            return [0, 30];
+            return [0, SLOT_H];
         },
 
         mouse(e, pos, n) {
@@ -565,19 +574,20 @@ function createLoraPicker(node) {
         options: { values: allLoras },
         _finding_role: "lora_picker",
 
-        draw(ctx, n, ww, y, wh) {
+        draw(ctx, n, ww, y, _wh) {
+            const h = SLOT_H;
             ctx.fillStyle = "#1f1f1f";
-            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.fillRect(8, y + 2, ww - 16, h - 4);
             ctx.strokeStyle = "#555";
             ctx.lineWidth = 1;
-            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, h - 5);
 
             const labelText = "🎛 LoRA:";
             ctx.fillStyle = "#aaa";
             ctx.font = "11px Arial";
             ctx.textBaseline = "middle";
             ctx.textAlign = "left";
-            ctx.fillText(labelText, 14, y + wh / 2);
+            ctx.fillText(labelText, 14, y + h / 2);
 
             const labelW = ctx.measureText(labelText).width + 8;
             const arrowW = 16;
@@ -591,16 +601,16 @@ function createLoraPicker(node) {
                 display = display.slice(0, -1);
             }
             if (display !== orig) display += "…";
-            ctx.fillText(display, valueX, y + wh / 2);
+            ctx.fillText(display, valueX, y + h / 2);
 
             ctx.fillStyle = "#aaa";
             ctx.font = "12px Arial";
             ctx.textAlign = "right";
-            ctx.fillText("▾", ww - 14, y + wh / 2);
+            ctx.fillText("▾", ww - 14, y + h / 2);
         },
 
         computeSize() {
-            return [0, 30];
+            return [0, SLOT_H];
         },
 
         mouse(e, pos, n) {
@@ -641,24 +651,25 @@ function createCustomButton(node, role, label, onClick) {
         options: {},
         _finding_role: role,
 
-        draw(ctx, n, ww, y, wh) {
+        draw(ctx, n, ww, y, _wh) {
+            const h = SLOT_H;
             // Pill background with subtle border.
             ctx.fillStyle = "#363636";
-            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.fillRect(8, y + 2, ww - 16, h - 4);
             ctx.strokeStyle = "#555";
             ctx.lineWidth = 1;
-            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, h - 5);
 
             // Centred label.
             ctx.fillStyle = "#ddd";
             ctx.font = "12px Arial";
             ctx.textBaseline = "middle";
             ctx.textAlign = "center";
-            ctx.fillText(this.name || "", ww / 2, y + wh / 2);
+            ctx.fillText(this.name || "", ww / 2, y + h / 2);
         },
 
         computeSize() {
-            return [0, 30];
+            return [0, SLOT_H];
         },
 
         mouse(e, pos, n) {
@@ -831,7 +842,7 @@ app.registerExtension({
                 const origCompute = strengthW.computeSize?.bind(strengthW);
                 strengthW.computeSize = function (width) {
                     const natural = origCompute ? origCompute(width) : [width, 26];
-                    return [natural[0], 30];
+                    return [natural[0], SLOT_H];
                 };
             }
 
