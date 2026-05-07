@@ -13,7 +13,11 @@
 
 ### Why I built this
 
-I have over a thousand LoRAs. ComfyUI's stock LoRA Loader makes me scroll a giant dropdown to find any of them. The wins from a node like this are obvious in hindsight, but I haven't seen another LoRA loader pack do this combination — bookmarks + trigger storage + actual fuzzy search — so here it is.
+I have over a thousand LoRAs. ComfyUI's stock LoRA Loader makes me scroll a giant dropdown to find any of them, then if I want to stack another I have to drag out a second loader, wire its `MODEL` in, wire its `MODEL` out, and remember the trigger words. Every part of that workflow is friction I've felt hundreds of times.
+
+This pack is what I wished the stock loader was: bookmark the LoRAs you actually use; type a few characters to find any LoRA in the folder; store the trigger words once and copy them with a click; chain another loader with a single button that wires itself into the model line for you. Each feature is small in isolation; together they make the most-used node in my workflow feel sharp instead of clumsy.
+
+I haven't seen another LoRA-loader pack do this combination — bookmarks + trigger storage + click-to-copy + fuzzy search + auto-chaining — so here it is.
 
 ---
 
