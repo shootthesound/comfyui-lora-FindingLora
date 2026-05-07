@@ -1,9 +1,16 @@
 // Finding LoRA — UI extension for the LoraLoaderFindingLora node.
 //
-// Adds:
-// - Bookmark dropdown (above lora_name) — selecting a bookmark sets lora_name.
-// - Toolbar row (📖 / ✏️ / 🔍) — bookmark toggle, edit trigger, fuzzy search.
-// - Trigger word display (below toolbar) — shows active bookmark's trigger.
+// Replaces the stock combo widgets with click-to-modal pickers (no more
+// horrible left/right chevron dropdowns). Default modal view is alphabetical
+// with the current selection highlighted; type to fuzzy-search.
+//
+// Widget stack:
+//   📚 Bookmarks: <name>     ← click → bookmark picker
+//   🎛 LoRA: <name>          ← click → LoRA picker (search built in)
+//   📖 / 📕 button            ← bookmark toggle
+//   ✏️ Edit Trigger Word      ← only visible when active LoRA is bookmarked
+//   🔑 trigger preview line   ← only when a trigger is set
+//   strength_model
 //
 // Bookmarks are stored server-side; this file talks to the Python pack via
 // /finding-lora/list, /finding-lora/add, /finding-lora/remove.
@@ -172,10 +179,26 @@ function fuzzySearch(query, targets) {
 }
 
 // =====================================================================
-// Search modal (plain DOM)
+// Picker modal (plain DOM)
+//
+// Replaces the stock ComfyUI combo's left/right chevrons with a real picker:
+// - Empty query → alphabetical list, current selection highlighted + scrolled
+//   into view. So clicking a long dropdown lands you near where you were.
+// - Type → fuzzy-search via fuzzyScore. Top 200 results to keep the UI snappy.
+// - ↑/↓ navigates, Enter selects, Esc cancels.
+//
+// Used by both the LoRA picker and the bookmark picker — same UX, different
+// data source.
 // =====================================================================
 
-function showSearchModal(allLoras, currentLora, onSelect) {
+function showPickerModal(allItems, current, opts) {
+    opts = opts || {};
+    const title = opts.title || "🔍 Pick";
+    const placeholder = opts.placeholder ||
+        "Type to fuzzy-search (out-of-order chars OK), or browse by alphabet. ↑/↓ + Enter.";
+    const onSelect = opts.onSelect;
+    const emptyMsg = opts.emptyMsg || "No items";
+
     const backdrop = document.createElement("div");
     backdrop.style.cssText = `
         position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -192,11 +215,11 @@ function showSearchModal(allLoras, currentLora, onSelect) {
 
     const header = document.createElement("div");
     header.style.cssText = "font-size: 14px; font-weight: bold; color: #aaa;";
-    header.textContent = "🔍  Find a LoRA";
+    header.textContent = title;
 
     const input = document.createElement("input");
     input.type = "text";
-    input.placeholder = "Type to fuzzy-search… (out-of-order chars OK, case-insensitive, ↑/↓ + Enter)";
+    input.placeholder = placeholder;
     input.style.cssText = `
         background: #1a1a1a; color: #eee; border: 1px solid #555;
         padding: 8px 12px; font-size: 13px; border-radius: 4px;
@@ -238,9 +261,9 @@ function showSearchModal(allLoras, currentLora, onSelect) {
         if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
     };
 
-    const choose = (loraName) => {
+    const choose = (val) => {
         close();
-        if (loraName) onSelect(loraName);
+        if (val !== null && val !== undefined && onSelect) onSelect(val);
     };
 
     const updateHighlight = () => {
@@ -253,14 +276,23 @@ function showSearchModal(allLoras, currentLora, onSelect) {
 
     const renderResults = () => {
         const q = input.value;
-        currentResults = fuzzySearch(q, allLoras).slice(0, 200);
-        selectedIdx = 0;
+        if (!q.trim()) {
+            // Default view: alphabetical, scrolled to current.
+            currentResults = [...allItems]
+                .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+                .map((t) => ({ target: t, score: 0 }));
+            const curIdx = currentResults.findIndex((r) => r.target === current);
+            selectedIdx = curIdx >= 0 ? curIdx : 0;
+        } else {
+            currentResults = fuzzySearch(q, allItems).slice(0, 200);
+            selectedIdx = 0;
+        }
         results.innerHTML = "";
 
         if (currentResults.length === 0) {
             const empty = document.createElement("div");
             empty.style.cssText = "padding: 24px; color: #888; text-align: center;";
-            empty.textContent = "No matches";
+            empty.textContent = emptyMsg;
             results.appendChild(empty);
             status.textContent = "0 matches";
             return;
@@ -270,7 +302,7 @@ function showSearchModal(allLoras, currentLora, onSelect) {
             const row = document.createElement("div");
             row.style.cssText = `
                 padding: 6px 12px; cursor: pointer; user-select: none;
-                ${r.target === currentLora ? "color: #4af;" : ""}
+                ${r.target === current ? "color: #4af;" : ""}
             `;
             row.textContent = r.target;
             row.addEventListener("click", () => choose(r.target));
@@ -281,9 +313,12 @@ function showSearchModal(allLoras, currentLora, onSelect) {
             results.appendChild(row);
         });
 
+        const noun = q.trim() ? "match" : "item";
+        const truncatedHint = (q.trim() && currentResults.length === 200)
+            ? " (top 200 — refine query)"
+            : "";
         status.textContent =
-            `${currentResults.length} match${currentResults.length === 1 ? "" : "es"}` +
-            (currentResults.length === 200 ? " (top 200 shown — refine query)" : "");
+            `${currentResults.length} ${noun}${currentResults.length === 1 ? "" : (noun === "match" ? "es" : "s")}${truncatedHint}`;
         updateHighlight();
     };
 
@@ -361,14 +396,9 @@ function setEditButtonVisibility(node) {
 function refreshNodeUI(node) {
     const active = findActiveBookmark(node);
 
-    // Bookmark dropdown — values + selected. Looked up by role so a future
-    // rename of the displayed label doesn't break this.
-    const bmw = findFindingWidget(node, "bookmark_combo")
-        || node.widgets?.find((w) => w.name === "Bookmarks");
+    // Bookmark picker display — show active bookmark name, or "(none)".
+    const bmw = findFindingWidget(node, "bookmark_combo");
     if (bmw) {
-        const names = ["(none)", ...((node._finding_bookmarks || []).map((b) => b.lora_name))];
-        bmw.options = bmw.options || {};
-        bmw.options.values = names;
         bmw.value = active ? active.lora_name : "(none)";
     }
 
@@ -410,25 +440,161 @@ function refreshNodeUI(node) {
 // =====================================================================
 
 function createBookmarkWidget(node) {
-    // Friendly display name — ComfyUI renders this as the dropdown label.
-    const w = node.addWidget(
-        "combo",
-        "Bookmarks",
-        "(none)",
-        (value) => {
-            if (value && value !== "(none)") {
-                setCurrentLoraName(node, value);
-                refreshNodeUI(node);
+    // Custom-type clickable widget (no native combo dropdown). Click opens
+    // the picker modal listing all bookmarks; type to filter, Enter to apply.
+    const widget = {
+        type: "FINDING_LORA_BOOKMARK_PICKER",
+        name: "Bookmarks",
+        value: "(none)",
+        options: { serialize: false },
+        serialize: false,
+        serializeValue: () => undefined,
+        _finding_role: "bookmark_combo",
+
+        draw(ctx, n, ww, y, wh) {
+            ctx.fillStyle = "#1f2630";
+            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.strokeStyle = "#3a4a5a";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+
+            const labelText = "📚 Bookmarks:";
+            ctx.fillStyle = "#aab";
+            ctx.font = "11px Arial";
+            ctx.textBaseline = "middle";
+            ctx.textAlign = "left";
+            ctx.fillText(labelText, 14, y + wh / 2);
+
+            const labelW = ctx.measureText(labelText).width + 8;
+            const arrowW = 16;
+            const valueX = 14 + labelW;
+            const maxW = ww - 16 - labelW - arrowW - 12;
+            const orig = this.value || "(none)";
+            let display = orig;
+            const isPlaceholder = orig === "(none)";
+            ctx.fillStyle = isPlaceholder ? "#777" : "#dde";
+            ctx.font = isPlaceholder ? "italic 12px Arial" : "12px Arial";
+            while (ctx.measureText(display + "…").width > maxW && display.length > 4) {
+                display = display.slice(0, -1);
             }
+            if (display !== orig) display += "…";
+            ctx.fillText(display, valueX, y + wh / 2);
+
+            ctx.fillStyle = "#88a";
+            ctx.font = "12px Arial";
+            ctx.textAlign = "right";
+            ctx.fillText("▾", ww - 14, y + wh / 2);
         },
-        { values: ["(none)"] }
-    );
-    w._finding_role = "bookmark_combo";
-    w.serialize = false;
-    w.options = w.options || { values: ["(none)"] };
-    w.options.serialize = false;
-    w.serializeValue = () => undefined;
-    return w;
+
+        computeSize() {
+            return [0, 24];
+        },
+
+        mouse(e, pos, n) {
+            if (e.type !== "pointerdown" && e.type !== "mousedown") return false;
+            const bms = node._finding_bookmarks || [];
+            if (bms.length === 0) {
+                alert("No bookmarks yet. Pick a LoRA and click 📖 to bookmark it.");
+                return true;
+            }
+            const items = bms.map((b) => b.lora_name);
+            const cur = getCurrentLoraName(node);
+            showPickerModal(items, cur, {
+                title: "📚 Pick a bookmark",
+                placeholder: "Type to filter bookmarks (↑/↓ + Enter)…",
+                emptyMsg: "No bookmarks match",
+                onSelect: (selected) => {
+                    if (!selected) return;
+                    setCurrentLoraName(node, selected);
+                    refreshNodeUI(node);
+                },
+            });
+            return true;
+        },
+    };
+    node.widgets.push(widget);
+    return widget;
+}
+
+function createLoraPicker(node) {
+    // Replaces the framework-rendered lora_name combo with a clickable
+    // display widget. The original combo stays in node.widgets (so its value
+    // serializes to widgets_values exactly as before — workflow-compatible
+    // with stock LoraLoader workflows) but we collapse its rendered size to
+    // zero so the native dropdown chevrons don't show.
+    const loraCombo = node.widgets?.find((w) => w.name === "lora_name");
+    if (!loraCombo) return null;
+
+    loraCombo._finding_orig_compute = loraCombo.computeSize;
+    loraCombo.computeSize = () => [0, -4];
+    loraCombo._finding_role = "lora_combo_hidden";
+
+    const widget = {
+        type: "FINDING_LORA_LORA_PICKER",
+        name: "lora_name_display",
+        value: "",
+        options: { serialize: false },
+        serialize: false,
+        serializeValue: () => undefined,
+        _finding_role: "lora_picker",
+
+        draw(ctx, n, ww, y, wh) {
+            ctx.fillStyle = "#1f1f1f";
+            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.strokeStyle = "#555";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+
+            const labelText = "🎛 LoRA:";
+            ctx.fillStyle = "#aaa";
+            ctx.font = "11px Arial";
+            ctx.textBaseline = "middle";
+            ctx.textAlign = "left";
+            ctx.fillText(labelText, 14, y + wh / 2);
+
+            const labelW = ctx.measureText(labelText).width + 8;
+            const arrowW = 16;
+            const valueX = 14 + labelW;
+            const maxW = ww - 16 - labelW - arrowW - 12;
+            const orig = loraCombo.value || "(none)";
+            let display = orig;
+            ctx.fillStyle = "#ddd";
+            ctx.font = "12px Arial";
+            while (ctx.measureText(display + "…").width > maxW && display.length > 4) {
+                display = display.slice(0, -1);
+            }
+            if (display !== orig) display += "…";
+            ctx.fillText(display, valueX, y + wh / 2);
+
+            ctx.fillStyle = "#aaa";
+            ctx.font = "12px Arial";
+            ctx.textAlign = "right";
+            ctx.fillText("▾", ww - 14, y + wh / 2);
+        },
+
+        computeSize() {
+            return [0, 26];
+        },
+
+        mouse(e, pos, n) {
+            if (e.type !== "pointerdown" && e.type !== "mousedown") return false;
+            const allLoras = (loraCombo.options?.values) || [];
+            const cur = loraCombo.value;
+            showPickerModal(allLoras, cur, {
+                title: "🎛 Find a LoRA",
+                placeholder: "Type to fuzzy-search, or browse alphabetically (↑/↓ + Enter)…",
+                emptyMsg: "No LoRAs match",
+                onSelect: (selected) => {
+                    if (!selected) return;
+                    setCurrentLoraName(node, selected);
+                    refreshNodeUI(node);
+                },
+            });
+            return true;
+        },
+    };
+    node.widgets.push(widget);
+    return widget;
 }
 
 function createBookmarkButton(node) {
@@ -478,24 +644,6 @@ function createEditTriggerButton(node) {
         addBookmark(cur, trigger.trim());
     });
     w._finding_role = "edit_btn";
-    w.serialize = false;
-    w.options = w.options || {};
-    w.options.serialize = false;
-    w.serializeValue = () => undefined;
-    return w;
-}
-
-function createSearchButton(node) {
-    const w = node.addWidget("button", "🔍 Find a LoRA…", null, () => {
-        const cur = getCurrentLoraName(node);
-        const loraWidget = node.widgets.find((x) => x.name === "lora_name");
-        const allLoras = (loraWidget?.options?.values) || [];
-        showSearchModal(allLoras, cur, (selected) => {
-            setCurrentLoraName(node, selected);
-            refreshNodeUI(node);
-        });
-    });
-    w._finding_role = "search_btn";
     w.serialize = false;
     w.options = w.options || {};
     w.options.serialize = false;
@@ -602,21 +750,24 @@ app.registerExtension({
             const bookmarkWidget = createBookmarkWidget(node);
             const bookmarkBtn = createBookmarkButton(node);
             const editBtn = createEditTriggerButton(node);
-            const searchBtn = createSearchButton(node);
             const triggerWidget = createTriggerWidget(node);
+            const loraPicker = createLoraPicker(node);
 
             // Stash for show/hide based on bookmark state.
             node._finding_edit_btn = editBtn;
 
-            // Order: bookmarks combo → lora_name → bookmark btn → edit btn →
-            // search btn → trigger display → strength widgets.
+            // Final order top-to-bottom:
+            //   bookmark picker → (hidden lora_name combo) → lora picker
+            //   → bookmark button → edit button → trigger display → strength
+            //
+            // We anchor everything off the lora_name combo's slot using
+            // moveWidgetAfter in reverse-of-desired order — each new widget
+            // pushes prior ones down by one position.
             moveWidgetBefore(node, bookmarkWidget, "lora_name");
-            // Splice in reverse-of-desired order using "moveWidgetAfter lora_name"
-            // so each new widget pushes prior ones down by one slot.
             moveWidgetAfter(node, triggerWidget, "lora_name");
-            moveWidgetAfter(node, searchBtn, "lora_name");
             moveWidgetAfter(node, editBtn, "lora_name");
             moveWidgetAfter(node, bookmarkBtn, "lora_name");
+            moveWidgetAfter(node, loraPicker, "lora_name");
 
             // Hook the lora_name dropdown so any change refreshes derived UI.
             const lora = node.widgets.find((w) => w.name === "lora_name");

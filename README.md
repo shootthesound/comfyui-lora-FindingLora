@@ -19,10 +19,11 @@ I have over a thousand LoRAs. ComfyUI's stock LoRA Loader makes me scroll a gian
 
 ### What's new vs the stock LoRA Loader
 
-- **📖 Bookmark button.** One click bookmarks the currently-selected LoRA. The icon flips to **📕** when the active LoRA is bookmarked, so a glance tells you whether you're on a favourite.
-- **Bookmarks dropdown.** A second dropdown above the main one lists every bookmarked LoRA. Picking one *sets* the main dropdown — the bookmark and the main always agree, no override semantics to reason about.
-- **✏️ Trigger word storage.** When you bookmark, you're optionally prompted for a trigger word or phrase. The trigger displays on a read-only line below the LoRA dropdown when a bookmarked LoRA is selected, *and* gets emitted as a `STRING` output you can wire into your prompt-encoding chain.
-- **🔍 Real fuzzy search.** Click the magnifying glass to open a search popup that runs proper fzf-style fuzzy matching across every LoRA in your `loras/` folder. Out-of-order characters, case-insensitive, ranked by score with word-boundary and consecutive-match bonuses. ↑/↓/Enter to navigate without the mouse.
+- **No more horrible left/right chevron dropdowns.** Both the LoRA picker and the bookmark picker open a proper modal on click. Default view is alphabetical with the current selection highlighted and scrolled into view, so a thousand-LoRA list lands you near where you were. Start typing to fuzzy-search — same picker, no separate search button.
+- **📖 Bookmark button.** One click bookmarks the currently-selected LoRA. The button label flips to **📕 Remove bookmark** when the active LoRA is bookmarked.
+- **📚 Bookmarks picker.** A second clickable bar above the LoRA picker lists every bookmarked LoRA. Picking one *sets* the LoRA picker — the bookmark and the active LoRA always agree.
+- **✏️ Trigger word storage.** When you bookmark, you're optionally prompted for a trigger word or phrase. The trigger displays on a read-only line when a bookmarked LoRA is selected, *and* gets emitted as a `STRING` output you can wire into your prompt-encoding chain.
+- **🔍 Real fuzzy search built into the picker.** Type in the picker modal to fzf-style fuzzy match across every LoRA in your `loras/` folder. Out-of-order characters, case-insensitive, ranked by score with word-boundary and consecutive-match bonuses. ↑/↓/Enter to navigate without the mouse.
 - **Bookmarks persist globally.** Stored at `<ComfyUI>/user/finding-lora/bookmarks.json`. They survive workflow saves/loads and pack upgrades.
 
 ---
@@ -36,9 +37,9 @@ I have over a thousand LoRAs. ComfyUI's stock LoRA Loader makes me scroll a gian
 
 Then:
 
-- Pick any LoRA in the main dropdown → click **📖** → optional trigger entry.
-- Next time you want this LoRA, pick it from the **Bookmarks** dropdown — main updates immediately.
-- Got 1000+ LoRAs? Click **🔍**, type `kase` and hit Enter, you've got `character_kasey_v3.safetensors` selected.
+- Click the **🎛 LoRA:** bar → modal opens at your current selection alphabetically. Click any name, or type `kase` and hit Enter, you've got `character_kasey_v3.safetensors` selected.
+- Click **📖 Bookmark this LoRA** → optional trigger word entry.
+- Next time, click **📚 Bookmarks:** to pick straight from your favourites.
 
 ---
 
@@ -55,14 +56,15 @@ Then:
 
 ---
 
-### Toolbar reference
+### UI reference
 
-| Icon | What it does |
+| Element | What it does |
 |---|---|
-| 📖 | Bookmark the current LoRA. Prompts for an optional trigger word/phrase. |
-| 📕 | Active LoRA is already bookmarked. Click to remove the bookmark (with confirmation). |
-| ✏️ | Edit the trigger word for the active LoRA. (If not yet bookmarked, prompts to add it first.) |
-| 🔍 | Open the fuzzy-search popup. Type, ↑/↓ to navigate, Enter to select, Esc to cancel. |
+| 📚 Bookmarks: | Click → picker modal listing all bookmarks. Type to filter. |
+| 🎛 LoRA: | Click → picker modal listing every LoRA. Default view is alphabetical scrolled to current. Type to fuzzy-search. ↑/↓ navigate, Enter selects, Esc cancels. |
+| 📖 Bookmark this LoRA | Bookmark the current LoRA. Prompts for an optional trigger word/phrase. |
+| 📕 Remove bookmark | Active LoRA is already bookmarked. Click to remove (with confirmation). |
+| ✏️ Edit Trigger Word | (Only visible when the active LoRA is bookmarked.) Edit the trigger word/phrase. |
 
 ---
 
