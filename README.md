@@ -9,6 +9,10 @@
   <a href="https://buymeacoffee.com/lorasandlenses"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
 </p>
 
+<p align="center">
+  <img src="node.png" alt="LoRA Loader (Finding LoRA) node — bookmarks bar, LoRA picker, bookmark/edit-trigger buttons, LoRA Strength slider, and Chain another LoRA Loader" width="520">
+</p>
+
 ---
 
 ### Why I built this
@@ -25,11 +29,19 @@ I haven't seen another LoRA-loader pack do this combination — bookmarks + trig
 
 - **No more horrible left/right chevron dropdowns.** Both the LoRA picker and the bookmark picker open a proper modal on click. Default view is alphabetical with the current selection highlighted and scrolled into view, so a thousand-LoRA list lands you near where you were. Start typing to fuzzy-search — same picker, no separate search button.
 - **📖 Bookmark button.** One click bookmarks the currently-selected LoRA. The button label flips to **📕 Remove bookmark** when the active LoRA is bookmarked.
-- **📚 Bookmarks picker.** A second clickable bar above the LoRA picker lists every bookmarked LoRA. Picking one *sets* the LoRA picker — the bookmark and the active LoRA always agree.
+- **📚 Bookmarks bar.** A second clickable bar above the LoRA picker shows the active bookmark and opens a picker modal listing every bookmarked LoRA. Picking one *sets* the LoRA picker — the bookmark and the active LoRA always agree.
 - **✏️ Trigger word storage.** When you bookmark, you're optionally prompted for a trigger word or phrase. The trigger displays on a read-only line when a bookmarked LoRA is selected, *and* gets emitted as a `STRING` output you can wire into your prompt-encoding chain.
 - **📋 Click-to-copy trigger.** Click the displayed trigger row to copy the phrase straight to your clipboard — paste it directly into a `CLIPTextEncode`. Shows a quick toast confirming the copy.
 - **🔗 Chain another LoRA Loader.** A button at the bottom spawns a fresh copy of the node beside the current one and splices it into the model chain. Any downstream `MODEL` connections get re-routed through the new node — `(upstream) → this node → new node → (former downstream)`. Stack as many LoRAs as you want without manual rewiring.
+
+  <img src="chained-nodes.png" alt="Two Finding LoRA loaders side-by-side — the second was spawned by clicking 'Chain another LoRA Loader' on the first; the model line is wired through automatically" width="780">
 - **🔍 Real fuzzy search built into the picker.** Type in the picker modal to fzf-style fuzzy match across every LoRA in your `loras/` folder. Substring matches always rank above scattered ones — typing `snoys` puts every name containing `snoys` at the top, before scattered subsequence matches sneak past on bonus points.
+
+  <img src="lora-picker.png" alt="LoRA picker modal — alphabetical with current selection highlighted, type to fuzzy-search across the whole loras folder" width="640">
+
+- **📚 Bookmark picker.** Same modal UX, scoped to your saved favourites — type a few characters and it filters down instantly.
+
+  <img src="bookmarks-picker.png" alt="Bookmarks picker modal — type to filter, ↑/↓ + Enter to apply" width="640">
 - **Bookmarks persist globally + sync live across nodes.** Stored at `<ComfyUI>/user/finding-lora/bookmarks.json`. Add a bookmark on one node and every other Finding LoRA node on the canvas updates immediately — no restart, no refresh.
 - **All-canvas custom rendering.** Every widget on the node — pickers, buttons, the strength slider — is canvas-drawn so text alignment is consistent and the node escapes the Vue-button-quirks that other custom-node packs run into. The strength widget keeps the standard interactions: click `◀ ▶` to step, drag the body to scrub, double-click for direct entry.
 
