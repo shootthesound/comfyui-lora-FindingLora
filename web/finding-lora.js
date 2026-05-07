@@ -14,18 +14,69 @@ const NODE_CLASS = "LoraLoaderFindingLora";
 const ROUTE_BASE = "/finding-lora";
 
 // =====================================================================
-// REST helpers
+// Module-level bookmarks cache + broadcast
+//
+// One fetch per page load, shared across every Finding-LoRA node on the
+// canvas. Mutations update the cache and broadcast to all live listeners,
+// so adding a bookmark on node A immediately updates node B's dropdown
+// without a restart.
 // =====================================================================
 
-async function fetchBookmarks() {
+let BOOKMARKS_CACHE = [];
+let BOOKMARKS_LOADED = false;
+let BOOKMARKS_LOAD_PROMISE = null;
+const BOOKMARK_LISTENERS = new Set();
+
+function broadcast() {
+    for (const fn of BOOKMARK_LISTENERS) {
+        try { fn(BOOKMARKS_CACHE); } catch (e) { console.warn(e); }
+    }
+}
+
+function ensureLoaded() {
+    // Memoised lazy fetch; safe to call from many node onCreated handlers
+    // simultaneously — only the first triggers the network request.
+    if (BOOKMARKS_LOADED) return Promise.resolve(BOOKMARKS_CACHE);
+    if (BOOKMARKS_LOAD_PROMISE) return BOOKMARKS_LOAD_PROMISE;
+    BOOKMARKS_LOAD_PROMISE = (async () => {
+        try {
+            const res = await fetch(`${ROUTE_BASE}/list`);
+            if (res.ok) {
+                const data = await res.json();
+                BOOKMARKS_CACHE = Array.isArray(data.bookmarks) ? data.bookmarks : [];
+            }
+        } catch (e) {
+            console.warn("[finding-lora] list failed:", e);
+        } finally {
+            BOOKMARKS_LOADED = true;
+            BOOKMARKS_LOAD_PROMISE = null;
+            broadcast();
+        }
+        return BOOKMARKS_CACHE;
+    })();
+    return BOOKMARKS_LOAD_PROMISE;
+}
+
+function subscribe(fn) {
+    BOOKMARK_LISTENERS.add(fn);
+    // Hand the subscriber the current cache immediately if we have one,
+    // so newly-created nodes don't have to await anything for the common case.
+    if (BOOKMARKS_LOADED) fn(BOOKMARKS_CACHE);
+    return () => BOOKMARK_LISTENERS.delete(fn);
+}
+
+async function refetchBookmarks() {
+    // Manual force-reload from disk. Useful if user edits bookmarks.json directly.
     try {
         const res = await fetch(`${ROUTE_BASE}/list`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return Array.isArray(data.bookmarks) ? data.bookmarks : [];
+        if (res.ok) {
+            const data = await res.json();
+            BOOKMARKS_CACHE = Array.isArray(data.bookmarks) ? data.bookmarks : [];
+            BOOKMARKS_LOADED = true;
+            broadcast();
+        }
     } catch (e) {
-        console.warn("[finding-lora] list failed:", e);
-        return [];
+        console.warn("[finding-lora] refetch failed:", e);
     }
 }
 
@@ -36,12 +87,17 @@ async function addBookmark(loraName, trigger) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ lora_name: loraName, trigger: trigger || "" }),
         });
-        if (!res.ok) return null;
+        if (!res.ok) return false;
         const data = await res.json();
-        return data.bookmarks || null;
+        if (Array.isArray(data.bookmarks)) {
+            BOOKMARKS_CACHE = data.bookmarks;
+            BOOKMARKS_LOADED = true;
+            broadcast();
+        }
+        return true;
     } catch (e) {
         console.warn("[finding-lora] add failed:", e);
-        return null;
+        return false;
     }
 }
 
@@ -52,12 +108,17 @@ async function removeBookmark(loraName) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ lora_name: loraName }),
         });
-        if (!res.ok) return null;
+        if (!res.ok) return false;
         const data = await res.json();
-        return data.bookmarks || null;
+        if (Array.isArray(data.bookmarks)) {
+            BOOKMARKS_CACHE = data.bookmarks;
+            BOOKMARKS_LOADED = true;
+            broadcast();
+        }
+        return true;
     } catch (e) {
         console.warn("[finding-lora] remove failed:", e);
-        return null;
+        return false;
     }
 }
 
@@ -370,15 +431,11 @@ function createToolbarWidget(node) {
         const cur = getCurrentLoraName(n);
 
         if (idx === 0) {
-            // Bookmark toggle.
+            // Bookmark toggle. The shared cache + broadcast updates this node
+            // (and every other Finding LoRA node on the canvas) automatically.
             if (active) {
                 if (window.confirm(`Remove bookmark for "${cur}"?`)) {
-                    removeBookmark(cur).then((bms) => {
-                        if (bms) {
-                            n._finding_bookmarks = bms;
-                            refreshNodeUI(n);
-                        }
-                    });
+                    removeBookmark(cur);
                 }
             } else {
                 if (!cur || cur === "None") {
@@ -390,12 +447,7 @@ function createToolbarWidget(node) {
                     ""
                 );
                 if (trigger === null) return true;
-                addBookmark(cur, trigger.trim()).then((bms) => {
-                    if (bms) {
-                        n._finding_bookmarks = bms;
-                        refreshNodeUI(n);
-                    }
-                });
+                addBookmark(cur, trigger.trim());
             }
         } else if (idx === 1) {
             // Edit trigger.
@@ -409,12 +461,7 @@ function createToolbarWidget(node) {
             const seed = active ? active.trigger || "" : "";
             const trigger = window.prompt(`Trigger word / phrase for "${cur}":`, seed);
             if (trigger === null) return true;
-            addBookmark(cur, trigger.trim()).then((bms) => {
-                if (bms) {
-                    n._finding_bookmarks = bms;
-                    refreshNodeUI(n);
-                }
-            });
+            addBookmark(cur, trigger.trim());
         } else if (idx === 2) {
             // Fuzzy search.
             const loraWidget = n.widgets.find((x) => x.name === "lora_name");
@@ -535,11 +582,21 @@ app.registerExtension({
                 };
             }
 
-            // Initial fetch — bookmarks may take a moment to load.
-            fetchBookmarks().then((bms) => {
+            // Subscribe to the shared bookmarks cache. Any change anywhere
+            // (this node, another node, or a server-side edit) pushes here.
+            const unsubscribe = subscribe((bms) => {
                 node._finding_bookmarks = bms;
                 refreshNodeUI(node);
             });
+            // Clean up the subscription when the node is removed from the graph.
+            const onRemoved = node.onRemoved;
+            node.onRemoved = function () {
+                try { unsubscribe(); } catch (e) {}
+                if (onRemoved) onRemoved.apply(this, arguments);
+            };
+
+            // Kick the lazy load (memoised — only the first call hits the network).
+            ensureLoaded();
 
             node.setSize(node.computeSize());
             return result;
