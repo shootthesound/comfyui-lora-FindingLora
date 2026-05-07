@@ -374,25 +374,6 @@ function findActiveBookmark(node) {
     return bms.find((b) => b && b.lora_name === cur) || null;
 }
 
-function setEditButtonVisibility(node) {
-    // Splice the ✏️ button in/out of node.widgets based on whether the active
-    // LoRA is bookmarked. Safe wrt serialization because the button widget is
-    // non-serializing — saved workflows only carry lora_name + strength_model
-    // regardless of the button's current presence.
-    const btn = node._finding_edit_btn;
-    if (!btn) return;
-    const active = findActiveBookmark(node);
-    const idx = node.widgets.indexOf(btn);
-
-    if (active && idx < 0) {
-        const bookmarkBtnIdx = node.widgets.findIndex((w) => w._finding_role === "bookmark_btn");
-        const insertAt = bookmarkBtnIdx >= 0 ? bookmarkBtnIdx + 1 : node.widgets.length;
-        node.widgets.splice(insertAt, 0, btn);
-    } else if (!active && idx >= 0) {
-        node.widgets.splice(idx, 1);
-    }
-}
-
 function refreshNodeUI(node) {
     const active = findActiveBookmark(node);
 
@@ -408,8 +389,14 @@ function refreshNodeUI(node) {
         btn.name = active ? "📕 Remove bookmark" : "📖 Bookmark this LoRA";
     }
 
-    // Edit trigger button — only visible when the active LoRA is bookmarked.
-    setEditButtonVisibility(node);
+    // Edit trigger button is always present — its click handler decides
+    // what to do based on bookmark state. (We don't conditionally splice it
+    // out; that would shift node.widgets length and cause widgets_values
+    // misalignment when ComfyUI loads the saved workflow positionally.)
+    const editBtn = findFindingWidget(node, "edit_btn");
+    if (editBtn) {
+        editBtn.name = active ? "✏️ Edit Trigger Word" : "✏️ Add trigger word (bookmarks first)";
+    }
 
     // Trigger display.
     const tw = findFindingWidget(node, "trigger_display");
@@ -442,13 +429,16 @@ function refreshNodeUI(node) {
 function createBookmarkWidget(node) {
     // Custom-type clickable widget (no native combo dropdown). Click opens
     // the picker modal listing all bookmarks; type to filter, Enter to apply.
+    //
+    // The widget serializes naturally (no serialize=false). Its value is
+    // cosmetic — refreshNodeUI overrides it on every load based on actual
+    // bookmark state. Keeping it serializable means widgets_values.length
+    // matches node.widgets.length, which avoids positional drift on load.
     const widget = {
         type: "FINDING_LORA_BOOKMARK_PICKER",
         name: "Bookmarks",
         value: "(none)",
-        options: { serialize: false },
-        serialize: false,
-        serializeValue: () => undefined,
+        options: {},
         _finding_role: "bookmark_combo",
 
         draw(ctx, n, ww, y, wh) {
@@ -640,43 +630,42 @@ function createBookmarkButton(node) {
     // Stable internal property so refreshNodeUI can find this widget even
     // after we've relabeled `name`.
     w._finding_role = "bookmark_btn";
-    w.serialize = false;
-    w.options = w.options || {};
-    w.options.serialize = false;
-    w.serializeValue = () => undefined;
     return w;
 }
 
 function createEditTriggerButton(node) {
-    // Only visible when the active LoRA is bookmarked — see
-    // setEditButtonVisibility(). So we can assume an active bookmark on click.
+    // Always present in node.widgets so widgets_values stays a stable length.
+    // Click handler covers both bookmarked (edit) and not-yet-bookmarked
+    // (offer to bookmark first) states.
     const w = node.addWidget("button", "✏️ Edit Trigger Word", null, () => {
         const cur = getCurrentLoraName(node);
+        if (!cur || cur === "None") {
+            alert("Pick a LoRA first.");
+            return;
+        }
         const active = findActiveBookmark(node);
-        if (!active) return; // belt-and-braces; UI shouldn't allow this
-        const seed = active.trigger || "";
+        if (!active) {
+            if (!window.confirm(`"${cur}" isn't bookmarked yet. Add it now?`)) return;
+        }
+        const seed = active ? active.trigger || "" : "";
         const trigger = window.prompt(`Trigger word / phrase for "${cur}":`, seed);
         if (trigger === null) return;
         addBookmark(cur, trigger.trim());
     });
     w._finding_role = "edit_btn";
-    w.serialize = false;
-    w.options = w.options || {};
-    w.options.serialize = false;
-    w.serializeValue = () => undefined;
     return w;
 }
 
 function createTriggerWidget(node) {
     // Hand-rolled widget pushed directly to node.widgets — gets no framework
     // label. Hides itself (computeSize → [0, -4]) when no trigger is set.
+    // Serializes naturally (no serialize=false) so widgets_values stays a
+    // stable length matching node.widgets across save/load.
     const widget = {
         type: "FINDING_LORA_TRIGGER_DISPLAY",
         name: "_finding_trigger",
         value: "",
-        options: { serialize: false },
-        serialize: false,
-        serializeValue: () => undefined,
+        options: {},
         _finding_role: "trigger_display",
 
         draw(ctx, n, ww, y, wh) {
@@ -820,13 +809,38 @@ app.registerExtension({
             return result;
         };
 
-        // Defensive: strip any null entries from widgets_values during workflow load.
-        // None of our injected widgets serialize, but workflows from ancient versions
-        // of this code (none yet, but for future-proofing) might include them.
+        // Migration: align widgets_values length to node.widgets length.
+        //
+        // Earlier versions of this extension saved a "compact" widgets_values
+        // (only entries for serializing widgets — typically [lora_name,
+        // strength_model] = length 2). When ComfyUI's load assigns positionally,
+        // a 2-entry array against a 6-widget node lands strength_model's value
+        // (1.0) on lora_name → backend then sees lora_name="1.0" and reports
+        // "not in list". The fix is two-pronged:
+        //   (1) all our widgets now serialize naturally so save count = widgets
+        //       count, eliminating drift on any future save.
+        //   (2) on load, if widgets_values is shorter than widgets, treat it as
+        //       the old compact format and place its values onto the data-
+        //       carrying widgets (lora_name, strength_model) by name.
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
-            if (info && Array.isArray(info.widgets_values)) {
-                info.widgets_values = info.widgets_values.filter((v) => v !== null);
+            if (info && Array.isArray(info.widgets_values) && this.widgets) {
+                const compact = info.widgets_values.filter((v) => v !== null);
+                if (info.widgets_values.length < this.widgets.length) {
+                    // Old compact format. Re-thread values onto named data widgets.
+                    const aligned = new Array(this.widgets.length).fill(null);
+                    const order = ["lora_name", "strength_model"];
+                    order.forEach((name, i) => {
+                        if (i >= compact.length) return;
+                        const idx = this.widgets.findIndex((w) => w.name === name);
+                        if (idx >= 0) aligned[idx] = compact[i];
+                    });
+                    info.widgets_values = aligned;
+                } else {
+                    // Already positional (new save). Just strip stray nulls
+                    // from any future-frontend artifact.
+                    info.widgets_values = info.widgets_values.slice();
+                }
             }
             return onConfigure?.apply(this, arguments);
         };
