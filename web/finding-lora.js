@@ -728,6 +728,25 @@ function createEditTriggerButton(node) {
     });
 }
 
+function showToast(message) {
+    const toast = document.createElement("div");
+    toast.style.cssText = `
+        position: fixed; top: 20px; right: 20px; background: #333; color: #fff;
+        padding: 10px 16px; border-radius: 6px; z-index: 100000;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        font-family: Arial, sans-serif; font-size: 13px;
+        opacity: 0; transition: opacity 0.18s;
+        pointer-events: none;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.opacity = "1"; });
+    setTimeout(() => {
+        toast.style.opacity = "0";
+        setTimeout(() => toast.remove(), 220);
+    }, 1400);
+}
+
 function createTriggerWidget(node) {
     // Hand-rolled widget pushed directly to node.widgets — gets no framework
     // label. Hides itself (computeSize → [0, -4]) when no trigger is set.
@@ -743,7 +762,9 @@ function createTriggerWidget(node) {
         draw(ctx, n, ww, y, wh) {
             const trigger = (this.value || "").trim();
             if (!trigger) return;
-            ctx.fillStyle = "rgba(80, 130, 70, 0.18)";
+            // Brief flash when value just got copied to clipboard.
+            const justCopied = this._finding_copied_at && (Date.now() - this._finding_copied_at) < 600;
+            ctx.fillStyle = justCopied ? "rgba(120, 180, 110, 0.32)" : "rgba(80, 130, 70, 0.18)";
             ctx.fillRect(8, y + 2, ww - 16, wh - 4);
             ctx.strokeStyle = "rgba(80, 130, 70, 0.45)";
             ctx.lineWidth = 1;
@@ -755,7 +776,9 @@ function createTriggerWidget(node) {
             ctx.textAlign = "left";
 
             const prefix = "🔑  ";
-            const maxWidth = ww - 16 - 12;
+            // Reserve space for a 📋 hint on the right.
+            const hintW = 22;
+            const maxWidth = ww - 16 - 12 - hintW;
             let label = prefix + trigger;
             while (
                 ctx.measureText(label + "…").width > maxWidth &&
@@ -765,6 +788,12 @@ function createTriggerWidget(node) {
             }
             if (label !== prefix + trigger) label += "…";
             ctx.fillText(label, 14, y + wh / 2);
+
+            // Right-side hint that this row is clickable.
+            ctx.fillStyle = "#aab";
+            ctx.font = "11px Arial";
+            ctx.textAlign = "right";
+            ctx.fillText("📋", ww - 14, y + wh / 2);
         },
 
         computeSize() {
@@ -772,7 +801,31 @@ function createTriggerWidget(node) {
             return trigger ? [0, 22] : [0, -4];
         },
 
-        mouse() { return false; },
+        mouse(event, pos, n) {
+            if (event.type !== "pointerdown" && event.type !== "mousedown") return false;
+            const trigger = (this.value || "").trim();
+            if (!trigger) return false;
+            // Copy the trigger word/phrase to clipboard. Keeps the trigger
+            // string on the system clipboard so the user can paste it into
+            // a CLIPTextEncode node directly.
+            if (navigator.clipboard?.writeText) {
+                navigator.clipboard.writeText(trigger).then(() => {
+                    this._finding_copied_at = Date.now();
+                    n.setDirtyCanvas(true, true);
+                    setTimeout(() => {
+                        this._finding_copied_at = null;
+                        n.setDirtyCanvas(true, true);
+                    }, 600);
+                    showToast(`Copied trigger: ${trigger}`);
+                }).catch((err) => {
+                    console.warn("[finding-lora] clipboard copy failed:", err);
+                    showToast("Copy failed — see console");
+                });
+            } else {
+                showToast("Clipboard API unavailable");
+            }
+            return true;
+        },
     };
     node.widgets.push(widget);
     return widget;
@@ -780,6 +833,65 @@ function createTriggerWidget(node) {
 
 function findFindingWidget(node, role) {
     return node.widgets?.find((w) => w._finding_role === role);
+}
+
+function spawnChainedNode(node) {
+    // Spawn another LoRA Loader of the same type, position it to the right
+    // of this node, and splice it into the model chain — any downstream
+    // connections from this node's MODEL output get re-routed through the
+    // new node, so the result is:
+    //
+    //   (upstream) → this node → new node → (downstream that was connected
+    //                                         to this node's MODEL output)
+    //
+    // If there were no downstream connections, the new node simply chains
+    // off this node's MODEL output and the user wires it forward themselves.
+    const LG = window.LiteGraph;
+    if (!LG) {
+        console.warn("[finding-lora] LiteGraph unavailable; cannot spawn node");
+        return;
+    }
+    const newNode = LG.createNode(NODE_CLASS);
+    if (!newNode) {
+        console.warn("[finding-lora] could not create", NODE_CLASS);
+        return;
+    }
+    app.graph.add(newNode);
+
+    const gap = 30;
+    const myW = (node.size && node.size[0]) || 200;
+    newNode.pos = [node.pos[0] + myW + gap, node.pos[1]];
+
+    // Defer wiring until the new node has finished onNodeCreated +
+    // onConfigure (LiteGraph runs these synchronously in add() but we
+    // still want our own widget-setup callback to settle first).
+    setTimeout(() => {
+        // Snapshot existing MODEL output links so we can re-route them.
+        const modelOut = node.outputs?.[0];
+        const existingLinkIds = (modelOut?.links || []).slice();
+
+        // Re-route each downstream connection through the new node.
+        for (const linkId of existingLinkIds) {
+            const link = app.graph.links?.[linkId];
+            if (!link) continue;
+            const targetNode = app.graph.getNodeById(link.target_id);
+            if (!targetNode) continue;
+            const targetSlot = link.target_slot;
+            // Disconnect just this single link from current node's output.
+            try { node.disconnectOutput(0, targetNode); } catch (e) { /* noop */ }
+            try { newNode.connect(0, targetNode, targetSlot); } catch (e) { /* noop */ }
+        }
+
+        // Connect this node's MODEL output → new node's MODEL input.
+        try { node.connect(0, newNode, 0); } catch (e) { /* noop */ }
+        app.graph.setDirtyCanvas(true, true);
+    }, 0);
+}
+
+function createSpawnButton(node) {
+    return createCustomButton(node, "spawn_btn", "🔗 Chain another LoRA Loader", () => {
+        spawnChainedNode(node);
+    });
 }
 
 function createStrengthWidget(node) {
@@ -980,6 +1092,8 @@ app.registerExtension({
             // Yank the framework strength_model widget and replace with a
             // canvas-drawn equivalent so it shares our text-centring contract.
             createStrengthWidget(node);
+            // Bottom-of-stack action: clone-and-chain another loader inline.
+            const spawnBtn = createSpawnButton(node);
 
             // Stash for show/hide based on bookmark state.
             node._finding_edit_btn = editBtn;
@@ -1032,40 +1146,9 @@ app.registerExtension({
             return result;
         };
 
-        // Migration: align widgets_values length to node.widgets length.
-        //
-        // Earlier versions of this extension saved a "compact" widgets_values
-        // (only entries for serializing widgets — typically [lora_name,
-        // strength_model] = length 2). When ComfyUI's load assigns positionally,
-        // a 2-entry array against a 6-widget node lands strength_model's value
-        // (1.0) on lora_name → backend then sees lora_name="1.0" and reports
-        // "not in list". The fix is two-pronged:
-        //   (1) all our widgets now serialize naturally so save count = widgets
-        //       count, eliminating drift on any future save.
-        //   (2) on load, if widgets_values is shorter than widgets, treat it as
-        //       the old compact format and place its values onto the data-
-        //       carrying widgets (lora_name, strength_model) by name.
-        const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function (info) {
-            if (info && Array.isArray(info.widgets_values) && this.widgets) {
-                const compact = info.widgets_values.filter((v) => v !== null);
-                if (info.widgets_values.length < this.widgets.length) {
-                    // Old compact format. Re-thread values onto named data widgets.
-                    const aligned = new Array(this.widgets.length).fill(null);
-                    const order = ["lora_name", "strength_model"];
-                    order.forEach((name, i) => {
-                        if (i >= compact.length) return;
-                        const idx = this.widgets.findIndex((w) => w.name === name);
-                        if (idx >= 0) aligned[idx] = compact[i];
-                    });
-                    info.widgets_values = aligned;
-                } else {
-                    // Already positional (new save). Just strip stray nulls
-                    // from any future-frontend artifact.
-                    info.widgets_values = info.widgets_values.slice();
-                }
-            }
-            return onConfigure?.apply(this, arguments);
-        };
+        // No onConfigure migration needed — every widget serialises naturally
+        // so widgets_values.length always equals node.widgets.length on save
+        // and matches on load. Backwards compatibility for older
+        // widgets_values shapes is intentionally not maintained.
     },
 });
