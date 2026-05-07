@@ -833,17 +833,12 @@ app.registerExtension({
             // Stash for show/hide based on bookmark state.
             node._finding_edit_btn = editBtn;
 
-            // Force the framework strength_model widget to share the same
-            // 30px slot height as our custom widgets. Without this, Vue's
-            // strength widget reports its own (different) height and the
-            // resulting layout-mismatch produces bottom-aligned text.
+            // Friendly label for the strength widget. We keep the internal
+            // `name` as "strength_model" so the backend input still resolves;
+            // ComfyUI's frontend prefers `label` for display when set.
             const strengthW = node.widgets.find((w) => w.name === "strength_model");
             if (strengthW) {
-                const origCompute = strengthW.computeSize?.bind(strengthW);
-                strengthW.computeSize = function (width) {
-                    const natural = origCompute ? origCompute(width) : [width, 26];
-                    return [natural[0], SLOT_H];
-                };
+                strengthW.label = "LoRA Strength";
             }
 
             // Final order top-to-bottom:
