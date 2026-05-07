@@ -866,6 +866,18 @@ function spawnChainedNode(node) {
     // onConfigure (LiteGraph runs these synchronously in add() but we
     // still want our own widget-setup callback to settle first).
     setTimeout(() => {
+        // Defensive reset: explicitly seed the spawned node's lora_picker
+        // with the first item from its own options.values. Guards against
+        // a one-time UI-race the user has seen where the framework combo's
+        // value (captured during createLoraPicker as `initialValue`) briefly
+        // matched the source node's current LoRA, making the new node show
+        // the same selection until the next refresh.
+        const newPicker = newNode.widgets?.find((w) => w._finding_role === "lora_picker");
+        const list = newPicker?.options?.values;
+        if (newPicker && Array.isArray(list) && list.length > 0) {
+            newPicker.value = list[0];
+        }
+
         // Snapshot existing MODEL output links so we can re-route them.
         const modelOut = node.outputs?.[0];
         const existingLinkIds = (modelOut?.links || []).slice();
@@ -884,6 +896,8 @@ function spawnChainedNode(node) {
 
         // Connect this node's MODEL output → new node's MODEL input.
         try { node.connect(0, newNode, 0); } catch (e) { /* noop */ }
+        // Refresh the new node's UI now that its picker is reset.
+        try { refreshNodeUI(newNode); } catch (e) { /* noop */ }
         app.graph.setDirtyCanvas(true, true);
     }, 0);
 }
