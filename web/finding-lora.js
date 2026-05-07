@@ -503,7 +503,7 @@ function createBookmarkWidget(node) {
         },
 
         computeSize() {
-            return [0, 24];
+            return [0, 30];
         },
 
         mouse(e, pos, n) {
@@ -600,7 +600,7 @@ function createLoraPicker(node) {
         },
 
         computeSize() {
-            return [0, 26];
+            return [0, 30];
         },
 
         mouse(e, pos, n) {
@@ -629,11 +629,52 @@ function createLoraPicker(node) {
     return widget;
 }
 
+function createCustomButton(node, role, label, onClick) {
+    // Custom-type clickable widget. Replaces addWidget("button", …) — the
+    // Vue-layer button widget bottom-aligns its text on this user's setup,
+    // and we have no clean override for it. By going custom-typed we control
+    // the entire render, so text is properly centred inside the button rect.
+    const widget = {
+        type: "FINDING_LORA_BUTTON",
+        name: label,
+        value: null,
+        options: {},
+        _finding_role: role,
+
+        draw(ctx, n, ww, y, wh) {
+            // Pill background with subtle border.
+            ctx.fillStyle = "#363636";
+            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.strokeStyle = "#555";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+
+            // Centred label.
+            ctx.fillStyle = "#ddd";
+            ctx.font = "12px Arial";
+            ctx.textBaseline = "middle";
+            ctx.textAlign = "center";
+            ctx.fillText(this.name || "", ww / 2, y + wh / 2);
+        },
+
+        computeSize() {
+            return [0, 30];
+        },
+
+        mouse(e, pos, n) {
+            if (e.type !== "pointerdown" && e.type !== "mousedown") return false;
+            try { onClick(); } catch (err) { console.warn("[finding-lora]", err); }
+            return true;
+        },
+    };
+    node.widgets.push(widget);
+    return widget;
+}
+
 function createBookmarkButton(node) {
-    // 📖/📕 toggle — relabels itself based on whether the active LoRA is
-    // bookmarked. refreshNodeUI() updates `widget.name` (displayed label) on
+    // 📖/📕 toggle — refreshNodeUI() updates `name` (displayed label) on
     // each state change.
-    const w = node.addWidget("button", "📖 Bookmark this LoRA", null, () => {
+    return createCustomButton(node, "bookmark_btn", "📖 Bookmark this LoRA", () => {
         const cur = getCurrentLoraName(node);
         const active = findActiveBookmark(node);
         if (active) {
@@ -653,17 +694,13 @@ function createBookmarkButton(node) {
             addBookmark(cur, trigger.trim());
         }
     });
-    // Stable internal property so refreshNodeUI can find this widget even
-    // after we've relabeled `name`.
-    w._finding_role = "bookmark_btn";
-    return w;
 }
 
 function createEditTriggerButton(node) {
     // Always present in node.widgets so widgets_values stays a stable length.
     // Click handler covers both bookmarked (edit) and not-yet-bookmarked
     // (offer to bookmark first) states.
-    const w = node.addWidget("button", "✏️ Edit Trigger Word", null, () => {
+    return createCustomButton(node, "edit_btn", "✏️ Edit Trigger Word", () => {
         const cur = getCurrentLoraName(node);
         if (!cur || cur === "None") {
             alert("Pick a LoRA first.");
@@ -678,8 +715,6 @@ function createEditTriggerButton(node) {
         if (trigger === null) return;
         addBookmark(cur, trigger.trim());
     });
-    w._finding_role = "edit_btn";
-    return w;
 }
 
 function createTriggerWidget(node) {
