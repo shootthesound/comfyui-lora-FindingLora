@@ -398,10 +398,10 @@ function findActiveBookmark(node) {
 function refreshNodeUI(node) {
     const active = findActiveBookmark(node);
 
-    // Bookmark picker display — show active bookmark name, or "(none)".
+    // Bookmark picker display — show active bookmark name, or "(none selected)".
     const bmw = findFindingWidget(node, "bookmark_combo");
     if (bmw) {
-        bmw.value = active ? active.lora_name : "(none)";
+        bmw.value = active ? active.lora_name : "(none selected)";
     }
 
     // Bookmark toggle button — flip 📖 / 📕 based on whether active LoRA is bookmarked.
@@ -471,7 +471,7 @@ function createBookmarkWidget(node) {
     const widget = {
         type: "FINDING_LORA_BOOKMARK_PICKER",
         name: "Bookmarks",
-        value: "(none)",
+        value: "(none selected)",
         options: {},
         _finding_role: "bookmark_combo",
 
@@ -494,9 +494,9 @@ function createBookmarkWidget(node) {
             const arrowW = 16;
             const valueX = 14 + labelW;
             const maxW = ww - 16 - labelW - arrowW - 12;
-            const orig = this.value || "(none)";
+            const orig = this.value || "(none selected)";
             let display = orig;
-            const isPlaceholder = orig === "(none)";
+            const isPlaceholder = orig === "(none selected)";
             ctx.fillStyle = isPlaceholder ? "#777" : "#dde";
             ctx.font = isPlaceholder ? "italic 12px Arial" : "12px Arial";
             while (ctx.measureText(display + "…").width > maxW && display.length > 4) {
@@ -593,7 +593,7 @@ function createLoraPicker(node) {
             const arrowW = 16;
             const valueX = 14 + labelW;
             const maxW = ww - 16 - labelW - arrowW - 12;
-            const orig = this.value || "(none)";
+            const orig = this.value || "(none selected)";
             let display = orig;
             ctx.fillStyle = "#ddd";
             ctx.font = "12px Arial";
