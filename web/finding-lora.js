@@ -782,6 +782,154 @@ function findFindingWidget(node, role) {
     return node.widgets?.find((w) => w._finding_role === role);
 }
 
+function createStrengthWidget(node) {
+    // Yank the framework strength_model number widget and replace with a
+    // canvas-drawn equivalent. We do this because Vue's number-widget
+    // template bottom-aligns text inside its slot in this user's setup,
+    // and we have no clean override for that. By going custom-typed, we
+    // own the entire render and can centre text properly.
+    //
+    // We re-implement the standard interactions:
+    //   - click ◀ / ▶ : decrement / increment by step
+    //   - drag in the body : change value proportional to drag distance
+    //   - double-click body : prompt for direct value entry
+    //
+    // The widget keeps name="strength_model" so the backend input still
+    // resolves; positional serialization is preserved by inserting at the
+    // exact index the framework widget occupied.
+    const fw = node.widgets?.find((w) => w.name === "strength_model");
+    if (!fw) return null;
+
+    const initialValue = typeof fw.value === "number" ? fw.value : 1.0;
+    const opts = fw.options || {};
+    const min = (typeof opts.min === "number") ? opts.min : -100;
+    const max = (typeof opts.max === "number") ? opts.max : 100;
+    const step = (typeof opts.step === "number") ? opts.step : 0.01;
+
+    const fwIdx = node.widgets.indexOf(fw);
+    if (fwIdx >= 0) node.widgets.splice(fwIdx, 1);
+
+    const widget = {
+        type: "FINDING_LORA_STRENGTH",
+        name: "strength_model",
+        label: "LoRA Strength",
+        value: initialValue,
+        options: { min, max, step, default: initialValue },
+        _finding_role: "strength",
+        _finding_drag: null,
+
+        draw(ctx, n, ww, y, _wh) {
+            const h = SLOT_H;
+            const arrowW = 16;
+            const padX = 8;
+
+            // Pill background
+            ctx.fillStyle = "#222";
+            ctx.fillRect(padX, y + 2, ww - padX * 2, h - 4);
+            ctx.strokeStyle = "#555";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(padX + 0.5, y + 2.5, ww - padX * 2 - 1, h - 5);
+
+            ctx.textBaseline = "middle";
+            ctx.font = "12px Arial";
+
+            // Arrows
+            ctx.fillStyle = "#aaa";
+            ctx.textAlign = "center";
+            ctx.fillText("◀", padX + arrowW / 2 + 4, y + h / 2);
+            ctx.fillText("▶", ww - padX - arrowW / 2 - 4, y + h / 2);
+
+            // Label (left of centre)
+            ctx.fillStyle = "#ccc";
+            ctx.textAlign = "left";
+            ctx.fillText(this.label || this.name, padX + arrowW + 12, y + h / 2);
+
+            // Value (right of centre)
+            ctx.fillStyle = "#fff";
+            ctx.textAlign = "right";
+            const valStr = (typeof this.value === "number")
+                ? this.value.toFixed(2)
+                : String(this.value);
+            ctx.fillText(valStr, ww - padX - arrowW - 12, y + h / 2);
+        },
+
+        computeSize() {
+            return [0, SLOT_H];
+        },
+
+        _clamp(v) {
+            return Math.max(this.options.min, Math.min(this.options.max, v));
+        },
+
+        _setValue(v) {
+            const clamped = this._clamp(v);
+            // Round to step precision to avoid float drift.
+            const stepped = Math.round(clamped / this.options.step) * this.options.step;
+            this.value = parseFloat(stepped.toFixed(4));
+        },
+
+        mouse(event, pos, n) {
+            const x = pos[0];
+            const ww = n.size[0];
+            const padX = 8;
+            const arrowHit = 24; // generous click target
+            const onLeft = x < padX + arrowHit;
+            const onRight = x > ww - padX - arrowHit;
+
+            if (event.type === "pointerdown" || event.type === "mousedown") {
+                if (onLeft) {
+                    this._setValue(this.value - this.options.step);
+                    n.setDirtyCanvas(true, true);
+                    return true;
+                }
+                if (onRight) {
+                    this._setValue(this.value + this.options.step);
+                    n.setDirtyCanvas(true, true);
+                    return true;
+                }
+                // Body click — start drag, but on dblclick open prompt.
+                if (event.detail === 2) {
+                    const entered = window.prompt(`${this.label || this.name}:`, String(this.value));
+                    if (entered !== null) {
+                        const parsed = parseFloat(entered);
+                        if (!isNaN(parsed)) {
+                            this._setValue(parsed);
+                            n.setDirtyCanvas(true, true);
+                        }
+                    }
+                    this._finding_drag = null;
+                    return true;
+                }
+                this._finding_drag = { startX: x, startValue: this.value };
+                return true;
+            }
+            if (event.type === "pointermove" || event.type === "mousemove") {
+                if (this._finding_drag) {
+                    const dx = x - this._finding_drag.startX;
+                    // 1 step per 4 px of drag — feels good for FLOATs.
+                    const delta = dx * this.options.step * 0.25;
+                    this._setValue(this._finding_drag.startValue + delta);
+                    n.setDirtyCanvas(true, true);
+                    return true;
+                }
+            }
+            if (event.type === "pointerup" || event.type === "mouseup") {
+                if (this._finding_drag) {
+                    this._finding_drag = null;
+                    return true;
+                }
+            }
+            return false;
+        },
+    };
+
+    // Re-insert at the framework widget's original position so positional
+    // serialization (widgets_values index) is unchanged.
+    const insertAt = fwIdx >= 0 ? fwIdx : node.widgets.length;
+    node.widgets.splice(insertAt, 0, widget);
+    return widget;
+}
+
 // =====================================================================
 // Splice helpers
 // =====================================================================
@@ -829,17 +977,12 @@ app.registerExtension({
             const editBtn = createEditTriggerButton(node);
             const triggerWidget = createTriggerWidget(node);
             const loraPicker = createLoraPicker(node);
+            // Yank the framework strength_model widget and replace with a
+            // canvas-drawn equivalent so it shares our text-centring contract.
+            createStrengthWidget(node);
 
             // Stash for show/hide based on bookmark state.
             node._finding_edit_btn = editBtn;
-
-            // Friendly label for the strength widget. We keep the internal
-            // `name` as "strength_model" so the backend input still resolves;
-            // ComfyUI's frontend prefers `label` for display when set.
-            const strengthW = node.widgets.find((w) => w.name === "strength_model");
-            if (strengthW) {
-                strengthW.label = "LoRA Strength";
-            }
 
             // Final order top-to-bottom:
             //   bookmark picker → lora picker → bookmark button → edit button
