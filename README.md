@@ -1,8 +1,8 @@
 <h1 align="center">Finding LoRA — for ComfyUI</h1>
 
 <p align="center">
-  A LoRA loader with <strong>bookmarks</strong>, <strong>trigger words</strong>, <strong>fuzzy search</strong>, <strong>click-to-copy triggers</strong>, and <strong>one-click chaining</strong>.<br>
-  Stop scrolling a thousand-LoRA dropdown.
+  A LoRA loader with <strong>bookmarks</strong>, <strong>trigger-word storage and click-to-copy</strong>, <strong>fuzzy search</strong>, and a <strong>one-click button to drop another loader inline beside this one and wire it into the model chain automatically</strong>.<br>
+  Stop scrolling a thousand-LoRA dropdown. Stop manually re-wiring whenever you want to stack another LoRA.
 </p>
 
 <p align="center">
