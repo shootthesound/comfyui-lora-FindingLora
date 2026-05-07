@@ -525,8 +525,20 @@ function createLoraPicker(node) {
     const loraCombo = node.widgets?.find((w) => w.name === "lora_name");
     if (!loraCombo) return null;
 
+    // Fully suppress framework rendering. Just collapsing computeSize isn't
+    // enough: ComfyUI's Vue overlay renders any widget whose `type` is in its
+    // known list (combo, button, number, …), regardless of canvas layout. By
+    // changing `type` to a custom string we force Vue to skip it; the no-op
+    // `draw` covers canvas fallback. The combo still lives in node.widgets,
+    // so its `value` serializes to widgets_values exactly as before — full
+    // workflow compatibility preserved.
+    loraCombo._finding_orig_type = loraCombo.type;
     loraCombo._finding_orig_compute = loraCombo.computeSize;
+    loraCombo._finding_orig_draw = loraCombo.draw;
+    loraCombo.type = "FINDING_LORA_HIDDEN_COMBO";
+    loraCombo.hidden = true;
     loraCombo.computeSize = () => [0, -4];
+    loraCombo.draw = () => {};
     loraCombo._finding_role = "lora_combo_hidden";
 
     const widget = {
@@ -795,7 +807,12 @@ app.registerExtension({
             // Kick the lazy load (memoised — only the first call hits the network).
             ensureLoaded();
 
-            node.setSize(node.computeSize());
+            // Default to 1.8× the natural width — LoRA filenames are long and
+            // the picker bars look cramped at stock width. Saved workflows
+            // restore their stored size after onNodeCreated returns, so this
+            // only affects newly-dropped nodes.
+            const natural = node.computeSize();
+            node.setSize([Math.round(natural[0] * 1.8), natural[1]]);
             return result;
         };
 
