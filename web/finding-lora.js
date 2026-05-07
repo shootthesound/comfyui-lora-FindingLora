@@ -137,6 +137,30 @@ function fuzzyScore(query, target) {
     if (!query) return 0;
     const q = query.toLowerCase();
     const t = target.toLowerCase();
+
+    // Tier 1 — contiguous substring match. Any target that literally contains
+    // the query string scores in a band (1000+) that no scattered subsequence
+    // match can reach, so a name with "snoys" always beats a name with
+    // s…n…o…y…s scattered across the filename.
+    const substrIdx = t.indexOf(q);
+    if (substrIdx >= 0) {
+        let score = 1000;
+        // Earlier in the string is better.
+        score -= substrIdx * 0.5;
+        // Match at start of filename = strongest possible.
+        if (substrIdx === 0) {
+            score += 500;
+        } else if (/[\s_\-./\\]/.test(t[substrIdx - 1])) {
+            // Match at a word boundary inside the filename (after _, -, ., /, \).
+            score += 200;
+        }
+        // Gentle length penalty so shorter filenames win on near-ties.
+        score -= t.length * 0.1;
+        return score;
+    }
+
+    // Tier 2 — scattered subsequence match (fzf-style). Caps well below 1000
+    // even with maximum bonuses on every char.
     let qi = 0;
     let score = 0;
     let consecutive = 0;
@@ -145,17 +169,14 @@ function fuzzyScore(query, target) {
     for (let ti = 0; ti < t.length && qi < q.length; ti++) {
         if (t[ti] === q[qi]) {
             let bonus = 10;
-            // Consecutive-match bonus accumulates (fzf "gap penalty / consecutive bonus" idea).
             if (ti === prevMatch + 1) {
                 consecutive += 5;
                 bonus += consecutive;
             } else {
                 consecutive = 0;
             }
-            // Word-boundary bonus: match at start of a token (after _, -, ., /, \, space).
             const isWordStart = ti === 0 || /[\s_\-./\\]/.test(t[ti - 1]);
             if (isWordStart) bonus += 15;
-            // Camel-case word-start bonus.
             if (ti > 0 && /[a-z]/.test(t[ti - 1]) && /[A-Z]/.test(target[ti])) bonus += 10;
             score += bonus;
             prevMatch = ti;
@@ -164,7 +185,7 @@ function fuzzyScore(query, target) {
     }
 
     if (qi < q.length) return -1; // not all query chars matched
-    score -= t.length * 0.1; // gentle length penalty so shorter wins on ties
+    score -= t.length * 0.1;
     return score;
 }
 
