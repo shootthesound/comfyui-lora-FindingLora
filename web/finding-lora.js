@@ -517,37 +517,36 @@ function createBookmarkWidget(node) {
 }
 
 function createLoraPicker(node) {
-    // Replaces the framework-rendered lora_name combo with a clickable
-    // display widget. The original combo stays in node.widgets (so its value
-    // serializes to widgets_values exactly as before — workflow-compatible
-    // with stock LoraLoader workflows) but we collapse its rendered size to
-    // zero so the native dropdown chevrons don't show.
+    // Replaces the framework-rendered lora_name combo. Approach: yank the
+    // combo entirely out of node.widgets and let our custom-type widget
+    // adopt name="lora_name" so it takes over both rendering AND
+    // serialization. The backend input still works because ComfyUI submits
+    // by widget.name → widget.value, which we satisfy.
+    //
+    // Why the yank is needed (not just hide): a hidden-but-present combo
+    // with computeSize [0, -4] still occupies a slot in LiteGraph's
+    // y-coordinate stack that ComfyUI's Vue overlay uses to position
+    // framework widgets (button, number) below. Result: their text
+    // bottom-aligns inside their boxes. Removing the combo entirely
+    // eliminates the layout displacement.
     const loraCombo = node.widgets?.find((w) => w.name === "lora_name");
     if (!loraCombo) return null;
 
-    // Fully suppress framework rendering. Just collapsing computeSize isn't
-    // enough: ComfyUI's Vue overlay renders any widget whose `type` is in its
-    // known list (combo, button, number, …), regardless of canvas layout. By
-    // changing `type` to a custom string we force Vue to skip it; the no-op
-    // `draw` covers canvas fallback. The combo still lives in node.widgets,
-    // so its `value` serializes to widgets_values exactly as before — full
-    // workflow compatibility preserved.
-    loraCombo._finding_orig_type = loraCombo.type;
-    loraCombo._finding_orig_compute = loraCombo.computeSize;
-    loraCombo._finding_orig_draw = loraCombo.draw;
-    loraCombo.type = "FINDING_LORA_HIDDEN_COMBO";
-    loraCombo.hidden = true;
-    loraCombo.computeSize = () => [0, -4];
-    loraCombo.draw = () => {};
-    loraCombo._finding_role = "lora_combo_hidden";
+    const allLoras = (loraCombo.options?.values || []).slice();
+    const initialValue = loraCombo.value;
+    const origCallback = loraCombo.callback;
+    const comboIdx = node.widgets.indexOf(loraCombo);
+    if (comboIdx >= 0) node.widgets.splice(comboIdx, 1);
 
     const widget = {
         type: "FINDING_LORA_LORA_PICKER",
-        name: "lora_name_display",
-        value: "",
-        options: { serialize: false },
-        serialize: false,
-        serializeValue: () => undefined,
+        // name "lora_name" so it takes over backend submission AND
+        // serialization slot from the removed combo.
+        name: "lora_name",
+        value: initialValue || "",
+        // Keep options.values so anything that introspects the widget
+        // (e.g. validation) still sees the LoRA list.
+        options: { values: allLoras },
         _finding_role: "lora_picker",
 
         draw(ctx, n, ww, y, wh) {
@@ -568,7 +567,7 @@ function createLoraPicker(node) {
             const arrowW = 16;
             const valueX = 14 + labelW;
             const maxW = ww - 16 - labelW - arrowW - 12;
-            const orig = loraCombo.value || "(none)";
+            const orig = this.value || "(none)";
             let display = orig;
             ctx.fillStyle = "#ddd";
             ctx.font = "12px Arial";
@@ -590,22 +589,27 @@ function createLoraPicker(node) {
 
         mouse(e, pos, n) {
             if (e.type !== "pointerdown" && e.type !== "mousedown") return false;
-            const allLoras = (loraCombo.options?.values) || [];
-            const cur = loraCombo.value;
-            showPickerModal(allLoras, cur, {
+            showPickerModal(this.options?.values || [], this.value, {
                 title: "🎛 Find a LoRA",
                 placeholder: "Type to fuzzy-search, or browse alphabetically (↑/↓ + Enter)…",
                 emptyMsg: "No LoRAs match",
                 onSelect: (selected) => {
                     if (!selected) return;
-                    setCurrentLoraName(node, selected);
+                    this.value = selected;
+                    if (origCallback) {
+                        try { origCallback.call(this, selected); } catch (e) { /* noop */ }
+                    }
                     refreshNodeUI(node);
                 },
             });
             return true;
         },
     };
-    node.widgets.push(widget);
+
+    // Reinsert at the original position so widgets_values ordering matches
+    // exactly — saved workflows load without column drift.
+    const insertAt = comboIdx >= 0 ? comboIdx : node.widgets.length;
+    node.widgets.splice(insertAt, 0, widget);
     return widget;
 }
 
@@ -769,17 +773,17 @@ app.registerExtension({
             node._finding_edit_btn = editBtn;
 
             // Final order top-to-bottom:
-            //   bookmark picker → (hidden lora_name combo) → lora picker
-            //   → bookmark button → edit button → trigger display → strength
+            //   bookmark picker → lora picker → bookmark button → edit button
+            //   → trigger display → strength_model
             //
-            // We anchor everything off the lora_name combo's slot using
-            // moveWidgetAfter in reverse-of-desired order — each new widget
+            // The loraPicker has already taken lora_name's slot inside
+            // createLoraPicker, so we anchor the rest of the moves off the
+            // name "lora_name". Reverse-of-desired order — each new widget
             // pushes prior ones down by one position.
             moveWidgetBefore(node, bookmarkWidget, "lora_name");
             moveWidgetAfter(node, triggerWidget, "lora_name");
             moveWidgetAfter(node, editBtn, "lora_name");
             moveWidgetAfter(node, bookmarkBtn, "lora_name");
-            moveWidgetAfter(node, loraPicker, "lora_name");
 
             // Hook the lora_name dropdown so any change refreshes derived UI.
             const lora = node.widgets.find((w) => w.name === "lora_name");
