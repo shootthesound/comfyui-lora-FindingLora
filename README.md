@@ -32,7 +32,7 @@ I have over a thousand LoRAs. ComfyUI's stock LoRA Loader makes me scroll a gian
 1. Drop the `comfyui-lora-FindingLora` folder into `ComfyUI/custom_nodes/`.
 2. Restart ComfyUI.
 3. Add the **LoRA Loader (Finding LoRA)** node from the `loaders` category.
-4. Wire it just like the stock `LoRA Loader` — `MODEL` and `CLIP` in, `MODEL` and `CLIP` out, plus a third **`trigger`** `STRING` output.
+4. Wire it just like the stock `LoRA Loader (Model Only)` — `MODEL` in, `MODEL` out, plus a second **`trigger`** `STRING` output.
 
 Then:
 
@@ -46,15 +46,12 @@ Then:
 
 #### Required
 - `model` (MODEL)
-- `clip` (CLIP)
 - `lora_name` (combo) — same dropdown as stock, but bookmark/search make it optional to actually scroll
 - `strength_model` (FLOAT, default 1.0)
-- `strength_clip` (FLOAT, default 1.0)
 
 #### Outputs
 - `model` (MODEL) — with the LoRA applied
-- `clip` (CLIP) — with the LoRA applied
-- `trigger` (STRING) — trigger word/phrase saved against the bookmarked LoRA, or empty string if not bookmarked. Wire into a `CLIPTextEncode` via a string-concat node to auto-prepend trigger words to your prompt.
+- `trigger` (STRING) — trigger word/phrase saved against the bookmarked LoRA, or empty string if not bookmarked. Wire into your prompt encoder via a string-concat node to auto-prepend trigger words to your prompt.
 
 ---
 

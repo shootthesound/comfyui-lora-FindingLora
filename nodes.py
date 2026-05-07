@@ -1,4 +1,4 @@
-"""Finding LoRA — a LoRA loader with bookmarks, trigger words, and fuzzy search.
+"""Finding LoRA — a model-only LoRA loader with bookmarks, trigger words, and fuzzy search.
 
 Solves the "I have 1000 LoRAs and the dropdown is unusable" problem:
 
@@ -156,7 +156,6 @@ class LoraLoaderFindingLora:
         return {
             "required": {
                 "model": ("MODEL", {"tooltip": "The diffusion model the LoRA will be applied to."}),
-                "clip": ("CLIP", {"tooltip": "The CLIP model the LoRA will be applied to."}),
                 "lora_name": (folder_paths.get_filename_list("loras"), {
                     "tooltip": "The name of the LoRA to load.",
                 }),
@@ -164,24 +163,19 @@ class LoraLoaderFindingLora:
                     "default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01,
                     "tooltip": "How strongly to modify the diffusion model.",
                 }),
-                "strength_clip": ("FLOAT", {
-                    "default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01,
-                    "tooltip": "How strongly to modify the CLIP model.",
-                }),
             }
         }
 
-    RETURN_TYPES = ("MODEL", "CLIP", "STRING")
-    RETURN_NAMES = ("model", "clip", "trigger")
+    RETURN_TYPES = ("MODEL", "STRING")
+    RETURN_NAMES = ("model", "trigger")
     OUTPUT_TOOLTIPS = (
         "The model with the LoRA applied.",
-        "The CLIP model with the LoRA applied.",
         "Trigger word/phrase saved against this LoRA's bookmark, or empty if not bookmarked.",
     )
     FUNCTION = "load_lora"
     CATEGORY = "loaders"
     DESCRIPTION = (
-        "LoRA loader with bookmarks, trigger-word storage, and fuzzy search. "
+        "Model-only LoRA loader with bookmarks, trigger-word storage, and fuzzy search. "
         "Bookmark your favourite LoRAs (📖), recall them via a secondary dropdown, "
         "associate trigger words / phrases that get emitted as a STRING output, "
         "and fuzzy-search across thousands of LoRAs (🔍). Bookmarks persist globally."
@@ -190,14 +184,12 @@ class LoraLoaderFindingLora:
     def __init__(self):
         self.loaded_lora = None  # cache last-loaded LoRA state dict (filename, sd)
 
-    def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
-        # No-op fast path: zero strengths and no LoRA name → nothing to do.
-        if strength_model == 0 and strength_clip == 0:
-            return (model, clip, _trigger_for(lora_name))
+    def load_lora(self, model, lora_name, strength_model):
+        if strength_model == 0:
+            return (model, _trigger_for(lora_name))
 
         lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
         lora = None
-        # Reuse cached state dict if same file.
         if self.loaded_lora is not None:
             cached_name, cached_sd = self.loaded_lora
             if cached_name == lora_path:
@@ -208,10 +200,10 @@ class LoraLoaderFindingLora:
             lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
             self.loaded_lora = (lora_path, lora)
 
-        model_lora, clip_lora = comfy.sd.load_lora_for_models(
-            model, clip, lora, strength_model, strength_clip,
+        model_lora, _ = comfy.sd.load_lora_for_models(
+            model, None, lora, strength_model, 0,
         )
-        return (model_lora, clip_lora, _trigger_for(lora_name))
+        return (model_lora, _trigger_for(lora_name))
 
 
 NODE_CLASS_MAPPINGS = {
