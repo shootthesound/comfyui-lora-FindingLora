@@ -342,8 +342,10 @@ function findActiveBookmark(node) {
 function refreshNodeUI(node) {
     const active = findActiveBookmark(node);
 
-    // Bookmark dropdown — values + selected.
-    const bmw = node.widgets?.find((w) => w.name === "_finding_bookmark");
+    // Bookmark dropdown — values + selected. Looked up by role so a future
+    // rename of the displayed label doesn't break this.
+    const bmw = findFindingWidget(node, "bookmark_combo")
+        || node.widgets?.find((w) => w.name === "Bookmarks");
     if (bmw) {
         const names = ["(none)", ...((node._finding_bookmarks || []).map((b) => b.lora_name))];
         bmw.options = bmw.options || {};
@@ -351,8 +353,14 @@ function refreshNodeUI(node) {
         bmw.value = active ? active.lora_name : "(none)";
     }
 
+    // Bookmark toggle button — flip 📖 / 📕 based on whether active LoRA is bookmarked.
+    const btn = findFindingWidget(node, "bookmark_btn");
+    if (btn) {
+        btn.name = active ? "📕 Remove bookmark" : "📖 Bookmark this LoRA";
+    }
+
     // Trigger display.
-    const tw = node.widgets?.find((w) => w.name === "_finding_trigger");
+    const tw = findFindingWidget(node, "trigger_display");
     if (tw) {
         tw.value = active && active.trigger ? active.trigger : "";
     }
@@ -365,10 +373,25 @@ function refreshNodeUI(node) {
 // Custom widgets
 // =====================================================================
 
+// =====================================================================
+// Widget builders
+//
+// Notes on the approach:
+// - Modern ComfyUI frontends render button-type widgets via the framework
+//   layer; custom `draw` / `mouse` overrides on those widgets don't always
+//   fire. So we use the official `addWidget("button", label, null, cb)`
+//   callback parameter for click handling — guaranteed to work.
+// - The bookmark "dropdown" stays as a real combo widget; we expose its
+//   label as the friendly displayed name "Bookmarks".
+// - The trigger display is a hand-rolled widget object pushed directly to
+//   `node.widgets` so it has no label rendered at all.
+// =====================================================================
+
 function createBookmarkWidget(node) {
+    // Friendly display name — ComfyUI renders this as the dropdown label.
     const w = node.addWidget(
         "combo",
-        "_finding_bookmark",
+        "Bookmarks",
         "(none)",
         (value) => {
             if (value && value !== "(none)") {
@@ -378,6 +401,7 @@ function createBookmarkWidget(node) {
         },
         { values: ["(none)"] }
     );
+    w._finding_role = "bookmark_combo";
     w.serialize = false;
     w.options = w.options || { values: ["(none)"] };
     w.options.serialize = false;
@@ -385,140 +409,134 @@ function createBookmarkWidget(node) {
     return w;
 }
 
-function createToolbarWidget(node) {
-    const w = node.addWidget("button", "__finding_toolbar", null, () => {});
+function createBookmarkButton(node) {
+    // 📖/📕 toggle — relabels itself based on whether the active LoRA is
+    // bookmarked. refreshNodeUI() updates `widget.name` (displayed label) on
+    // each state change.
+    const w = node.addWidget("button", "📖 Bookmark this LoRA", null, () => {
+        const cur = getCurrentLoraName(node);
+        const active = findActiveBookmark(node);
+        if (active) {
+            if (window.confirm(`Remove bookmark for "${cur}"?`)) {
+                removeBookmark(cur);
+            }
+        } else {
+            if (!cur || cur === "None") {
+                alert("Pick a LoRA first.");
+                return;
+            }
+            const trigger = window.prompt(
+                `Bookmark "${cur}"\n\nOptional trigger word / phrase (leave blank if none):`,
+                ""
+            );
+            if (trigger === null) return;
+            addBookmark(cur, trigger.trim());
+        }
+    });
+    // Stable internal property so refreshNodeUI can find this widget even
+    // after we've relabeled `name`.
+    w._finding_role = "bookmark_btn";
     w.serialize = false;
     w.options = w.options || {};
     w.options.serialize = false;
     w.serializeValue = () => undefined;
+    return w;
+}
 
-    const M = 8, GAP = 6, BTN = 30;
-
-    w.draw = function (ctx, n, ww, y, wh) {
-        const active = findActiveBookmark(n);
-        const labels = [active ? "📕" : "📖", "✏️", "🔍"];
-
-        for (let i = 0; i < 3; i++) {
-            const x = M + i * (BTN + GAP);
-            const dimmed = i === 1 && !active;
-
-            ctx.fillStyle = "#3a3a3a";
-            ctx.fillRect(x, y + 2, BTN, wh - 4);
-            ctx.strokeStyle = "#555";
-            ctx.lineWidth = 1;
-            ctx.strokeRect(x + 0.5, y + 2.5, BTN - 1, wh - 5);
-
-            ctx.fillStyle = dimmed ? "#666" : "#fff";
-            ctx.font = "16px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(labels[i], x + BTN / 2, y + wh / 2 + 1);
+function createEditTriggerButton(node) {
+    const w = node.addWidget("button", "✏️ Edit Trigger Word", null, () => {
+        const cur = getCurrentLoraName(node);
+        const active = findActiveBookmark(node);
+        if (!cur || cur === "None") {
+            alert("Pick a LoRA first.");
+            return;
         }
-    };
-
-    w.computeSize = () => [0, 36];
-
-    w.mouse = function (event, pos, n) {
-        if (event.type !== "pointerdown") return false;
-        const localX = pos[0];
-        if (localX < M) return false;
-        const cellWidth = BTN + GAP;
-        const idx = Math.floor((localX - M) / cellWidth);
-        const offsetInCell = (localX - M) - idx * cellWidth;
-        if (idx < 0 || idx > 2 || offsetInCell > BTN) return false;
-
-        const active = findActiveBookmark(n);
-        const cur = getCurrentLoraName(n);
-
-        if (idx === 0) {
-            // Bookmark toggle. The shared cache + broadcast updates this node
-            // (and every other Finding LoRA node on the canvas) automatically.
-            if (active) {
-                if (window.confirm(`Remove bookmark for "${cur}"?`)) {
-                    removeBookmark(cur);
-                }
-            } else {
-                if (!cur || cur === "None") {
-                    alert("Pick a LoRA first.");
-                    return true;
-                }
-                const trigger = window.prompt(
-                    `Bookmark "${cur}"\n\nOptional trigger word / phrase (leave blank if none):`,
-                    ""
-                );
-                if (trigger === null) return true;
-                addBookmark(cur, trigger.trim());
-            }
-        } else if (idx === 1) {
-            // Edit trigger.
-            if (!cur || cur === "None") {
-                alert("Pick a LoRA first.");
-                return true;
-            }
-            if (!active) {
-                if (!window.confirm(`"${cur}" isn't bookmarked yet. Add it now?`)) return true;
-            }
-            const seed = active ? active.trigger || "" : "";
-            const trigger = window.prompt(`Trigger word / phrase for "${cur}":`, seed);
-            if (trigger === null) return true;
-            addBookmark(cur, trigger.trim());
-        } else if (idx === 2) {
-            // Fuzzy search.
-            const loraWidget = n.widgets.find((x) => x.name === "lora_name");
-            const allLoras = (loraWidget?.options?.values) || [];
-            showSearchModal(allLoras, cur, (selected) => {
-                setCurrentLoraName(n, selected);
-                refreshNodeUI(n);
-            });
+        if (!active) {
+            if (!window.confirm(`"${cur}" isn't bookmarked yet. Add it now?`)) return;
         }
-        return true;
-    };
+        const seed = active ? active.trigger || "" : "";
+        const trigger = window.prompt(`Trigger word / phrase for "${cur}":`, seed);
+        if (trigger === null) return;
+        addBookmark(cur, trigger.trim());
+    });
+    w._finding_role = "edit_btn";
+    w.serialize = false;
+    w.options = w.options || {};
+    w.options.serialize = false;
+    w.serializeValue = () => undefined;
+    return w;
+}
 
+function createSearchButton(node) {
+    const w = node.addWidget("button", "🔍 Find a LoRA…", null, () => {
+        const cur = getCurrentLoraName(node);
+        const loraWidget = node.widgets.find((x) => x.name === "lora_name");
+        const allLoras = (loraWidget?.options?.values) || [];
+        showSearchModal(allLoras, cur, (selected) => {
+            setCurrentLoraName(node, selected);
+            refreshNodeUI(node);
+        });
+    });
+    w._finding_role = "search_btn";
+    w.serialize = false;
+    w.options = w.options || {};
+    w.options.serialize = false;
+    w.serializeValue = () => undefined;
     return w;
 }
 
 function createTriggerWidget(node) {
-    // Read-only display widget that hides itself when no trigger is set.
-    const w = node.addWidget("text", "_finding_trigger", "", () => {});
-    w.serialize = false;
-    w.options = w.options || {};
-    w.options.serialize = false;
-    w.serializeValue = () => undefined;
+    // Hand-rolled widget pushed directly to node.widgets — gets no framework
+    // label. Hides itself (computeSize → [0, -4]) when no trigger is set.
+    const widget = {
+        type: "FINDING_LORA_TRIGGER_DISPLAY",
+        name: "_finding_trigger",
+        value: "",
+        options: { serialize: false },
+        serialize: false,
+        serializeValue: () => undefined,
+        _finding_role: "trigger_display",
 
-    w.draw = function (ctx, n, ww, y, wh) {
-        const trigger = (this.value || "").trim();
-        if (!trigger) return;
-        // Subtle band so it stands out as an info row, not an input.
-        ctx.fillStyle = "rgba(80, 130, 70, 0.18)";
-        ctx.fillRect(8, y + 2, ww - 16, wh - 4);
-        ctx.strokeStyle = "rgba(80, 130, 70, 0.45)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
+        draw(ctx, n, ww, y, wh) {
+            const trigger = (this.value || "").trim();
+            if (!trigger) return;
+            ctx.fillStyle = "rgba(80, 130, 70, 0.18)";
+            ctx.fillRect(8, y + 2, ww - 16, wh - 4);
+            ctx.strokeStyle = "rgba(80, 130, 70, 0.45)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, wh - 5);
 
-        ctx.fillStyle = "#cce";
-        ctx.font = "11px monospace";
-        ctx.textBaseline = "middle";
-        ctx.textAlign = "left";
+            ctx.fillStyle = "#cce";
+            ctx.font = "11px monospace";
+            ctx.textBaseline = "middle";
+            ctx.textAlign = "left";
 
-        // Truncate if too long.
-        const prefix = "🔑  ";
-        const maxWidth = ww - 16 - 12;
-        let label = prefix + trigger;
-        while (ctx.measureText(label + "…").width > maxWidth && label.length > prefix.length + 4) {
-            label = label.slice(0, -1);
-        }
-        if (label !== prefix + trigger) label += "…";
-        ctx.fillText(label, 14, y + wh / 2);
+            const prefix = "🔑  ";
+            const maxWidth = ww - 16 - 12;
+            let label = prefix + trigger;
+            while (
+                ctx.measureText(label + "…").width > maxWidth &&
+                label.length > prefix.length + 4
+            ) {
+                label = label.slice(0, -1);
+            }
+            if (label !== prefix + trigger) label += "…";
+            ctx.fillText(label, 14, y + wh / 2);
+        },
+
+        computeSize() {
+            const trigger = (this.value || "").trim();
+            return trigger ? [0, 22] : [0, -4];
+        },
+
+        mouse() { return false; },
     };
+    node.widgets.push(widget);
+    return widget;
+}
 
-    w.computeSize = function () {
-        const trigger = (this.value || "").trim();
-        if (!trigger) return [0, -4]; // hidden
-        return [0, 22];
-    };
-
-    w.mouse = () => false;
-    return w;
+function findFindingWidget(node, role) {
+    return node.widgets?.find((w) => w._finding_role === role);
 }
 
 // =====================================================================
@@ -564,13 +582,20 @@ app.registerExtension({
             const node = this;
 
             const bookmarkWidget = createBookmarkWidget(node);
-            const toolbarWidget = createToolbarWidget(node);
+            const bookmarkBtn = createBookmarkButton(node);
+            const editBtn = createEditTriggerButton(node);
+            const searchBtn = createSearchButton(node);
             const triggerWidget = createTriggerWidget(node);
 
-            // Order: bookmarks → lora_name → toolbar → trigger → strengths.
+            // Order: bookmarks combo → lora_name → bookmark btn → edit btn →
+            // search btn → trigger display → strength widgets.
             moveWidgetBefore(node, bookmarkWidget, "lora_name");
-            moveWidgetAfter(node, toolbarWidget, "lora_name");
-            moveWidgetAfter(node, triggerWidget, "__finding_toolbar");
+            // Splice in reverse-of-desired order using "moveWidgetAfter lora_name"
+            // so each new widget pushes prior ones down by one slot.
+            moveWidgetAfter(node, triggerWidget, "lora_name");
+            moveWidgetAfter(node, searchBtn, "lora_name");
+            moveWidgetAfter(node, editBtn, "lora_name");
+            moveWidgetAfter(node, bookmarkBtn, "lora_name");
 
             // Hook the lora_name dropdown so any change refreshes derived UI.
             const lora = node.widgets.find((w) => w.name === "lora_name");
