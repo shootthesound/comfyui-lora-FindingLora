@@ -404,7 +404,12 @@ function refreshNodeUI(node) {
         tw.value = active && active.trigger ? active.trigger : "";
     }
 
-    node.setSize(node.computeSize());
+    // Update height only — preserve current width so the user's resize
+    // (or our initial 1.8× default) survives bookmark broadcasts and trigger
+    // visibility changes.
+    const computed = node.computeSize();
+    const currentWidth = (node.size && node.size[0]) || computed[0];
+    node.setSize([Math.max(currentWidth, computed[0]), computed[1]]);
     node.setDirtyCanvas(true, true);
 }
 
