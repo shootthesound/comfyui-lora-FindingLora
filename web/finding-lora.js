@@ -339,6 +339,25 @@ function findActiveBookmark(node) {
     return bms.find((b) => b && b.lora_name === cur) || null;
 }
 
+function setEditButtonVisibility(node) {
+    // Splice the ✏️ button in/out of node.widgets based on whether the active
+    // LoRA is bookmarked. Safe wrt serialization because the button widget is
+    // non-serializing — saved workflows only carry lora_name + strength_model
+    // regardless of the button's current presence.
+    const btn = node._finding_edit_btn;
+    if (!btn) return;
+    const active = findActiveBookmark(node);
+    const idx = node.widgets.indexOf(btn);
+
+    if (active && idx < 0) {
+        const bookmarkBtnIdx = node.widgets.findIndex((w) => w._finding_role === "bookmark_btn");
+        const insertAt = bookmarkBtnIdx >= 0 ? bookmarkBtnIdx + 1 : node.widgets.length;
+        node.widgets.splice(insertAt, 0, btn);
+    } else if (!active && idx >= 0) {
+        node.widgets.splice(idx, 1);
+    }
+}
+
 function refreshNodeUI(node) {
     const active = findActiveBookmark(node);
 
@@ -358,6 +377,9 @@ function refreshNodeUI(node) {
     if (btn) {
         btn.name = active ? "📕 Remove bookmark" : "📖 Bookmark this LoRA";
     }
+
+    // Edit trigger button — only visible when the active LoRA is bookmarked.
+    setEditButtonVisibility(node);
 
     // Trigger display.
     const tw = findFindingWidget(node, "trigger_display");
@@ -444,17 +466,13 @@ function createBookmarkButton(node) {
 }
 
 function createEditTriggerButton(node) {
+    // Only visible when the active LoRA is bookmarked — see
+    // setEditButtonVisibility(). So we can assume an active bookmark on click.
     const w = node.addWidget("button", "✏️ Edit Trigger Word", null, () => {
         const cur = getCurrentLoraName(node);
         const active = findActiveBookmark(node);
-        if (!cur || cur === "None") {
-            alert("Pick a LoRA first.");
-            return;
-        }
-        if (!active) {
-            if (!window.confirm(`"${cur}" isn't bookmarked yet. Add it now?`)) return;
-        }
-        const seed = active ? active.trigger || "" : "";
+        if (!active) return; // belt-and-braces; UI shouldn't allow this
+        const seed = active.trigger || "";
         const trigger = window.prompt(`Trigger word / phrase for "${cur}":`, seed);
         if (trigger === null) return;
         addBookmark(cur, trigger.trim());
@@ -586,6 +604,9 @@ app.registerExtension({
             const editBtn = createEditTriggerButton(node);
             const searchBtn = createSearchButton(node);
             const triggerWidget = createTriggerWidget(node);
+
+            // Stash for show/hide based on bookmark state.
+            node._finding_edit_btn = editBtn;
 
             // Order: bookmarks combo → lora_name → bookmark btn → edit btn →
             // search btn → trigger display → strength widgets.
