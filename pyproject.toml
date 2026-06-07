@@ -1,0 +1,20 @@
+[project]
+name = "comfyui-finding-lora"
+description = "A LoRA loader with bookmarks, trigger-word storage and click-to-copy, fuzzy search, and a one-click button to drop another loader inline and wire it into the model chain automatically. Stop scrolling a thousand-LoRA dropdown and stop manually re-wiring to stack another LoRA."
+version = "1.0.0"
+license = "MIT"
+authors = [
+    { name = "Peter Neill" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+
+[project.urls]
+Homepage = "https://github.com/shootthesound/comfyui-lora-FindingLora"
+Repository = "https://github.com/shootthesound/comfyui-lora-FindingLora"
+Issues = "https://github.com/shootthesound/comfyui-lora-FindingLora/issues"
+
+[tool.comfy]
+PublisherId = "shootthesound"
+DisplayName = "Finding LoRA"
+Icon = ""
