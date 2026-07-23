@@ -14,6 +14,8 @@
 //   ➕ LoRA stack rows         ← up to 10 extra LoRAs w/ per-row strength;
 //                                only as many rows as are in use, plus one
 //                                "add" row while under the cap
+//   💾 Save LoRA Set           ← only when the stack has ≥1 entry
+//   📂 Load LoRA Set           ← always; picker modal of saved sets
 //
 // Bookmarks are stored server-side; this file talks to the Python pack via
 // /finding-lora/list, /finding-lora/add, /finding-lora/remove.
@@ -128,6 +130,52 @@ async function removeBookmark(loraName) {
         return true;
     } catch (e) {
         console.warn("[finding-lora] remove failed:", e);
+        return false;
+    }
+}
+
+// =====================================================================
+// LoRA set API — saved snapshots of a node's full LoRA config
+// (main lora + strength + the whole stack). No live cache/broadcast:
+// sets are fetched fresh each time the Load picker opens.
+// =====================================================================
+
+async function fetchLoraSets() {
+    try {
+        const res = await fetch(`${ROUTE_BASE}/sets/list`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return Array.isArray(data.sets) ? data.sets : [];
+    } catch (e) {
+        console.warn("[finding-lora] sets list failed:", e);
+        return [];
+    }
+}
+
+async function saveLoraSet(payload) {
+    try {
+        const res = await fetch(`${ROUTE_BASE}/sets/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        return res.ok;
+    } catch (e) {
+        console.warn("[finding-lora] set save failed:", e);
+        return false;
+    }
+}
+
+async function removeLoraSet(name) {
+    try {
+        const res = await fetch(`${ROUTE_BASE}/sets/remove`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+        });
+        return res.ok;
+    } catch (e) {
+        console.warn("[finding-lora] set remove failed:", e);
         return false;
     }
 }
@@ -328,7 +376,36 @@ function showPickerModal(allItems, current, opts) {
                 padding: 6px 12px; cursor: pointer; user-select: none;
                 ${r.target === current ? "color: #4af;" : ""}
             `;
-            row.textContent = r.target;
+            if (opts.onDelete) {
+                // Structured row with a 🗑 action on the right. The delete
+                // callback receives a `done` continuation that drops the item
+                // from the list and re-renders — only call it on success.
+                row.style.display = "flex";
+                row.style.justifyContent = "space-between";
+                row.style.alignItems = "center";
+                row.style.gap = "8px";
+                const label = document.createElement("span");
+                label.textContent = r.target;
+                label.style.cssText = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+                const del = document.createElement("span");
+                del.textContent = "🗑";
+                del.title = "Delete";
+                del.style.cssText = "opacity: 0.55; flex: 0 0 auto;";
+                del.addEventListener("mouseenter", () => { del.style.opacity = "1"; });
+                del.addEventListener("mouseleave", () => { del.style.opacity = "0.55"; });
+                del.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    opts.onDelete(r.target, () => {
+                        const idx = allItems.indexOf(r.target);
+                        if (idx >= 0) allItems.splice(idx, 1);
+                        renderResults();
+                    });
+                });
+                row.appendChild(label);
+                row.appendChild(del);
+            } else {
+                row.textContent = r.target;
+            }
             row.addEventListener("click", () => choose(r.target));
             row.addEventListener("mouseenter", () => {
                 selectedIdx = i;
@@ -1336,6 +1413,137 @@ function createStackWidget(node) {
 }
 
 // =====================================================================
+// LoRA sets — save/load the node's full LoRA config by name
+//
+// 💾 Save LoRA Set: visible only when the stack has at least one entry
+//   (i.e. 2+ LoRAs in play). Prompts for a name; saving under an existing
+//   name overwrites it.
+// 📂 Load LoRA Set: always visible. Opens the picker modal listing every
+//   saved set (type to filter), each row with a 🗑 delete action.
+// =====================================================================
+
+function saveCurrentSet(node) {
+    const sw = findFindingWidget(node, "lora_stack");
+    const stack = sw ? stackEntries(sw) : [];
+    const name = window.prompt(
+        "Name this LoRA set (saving under an existing name overwrites it):",
+        ""
+    );
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+        showToast("Set name can't be empty");
+        return;
+    }
+    const strengthW = findFindingWidget(node, "strength");
+    saveLoraSet({
+        name: trimmed,
+        lora_name: getCurrentLoraName(node),
+        strength_model: strengthW && typeof strengthW.value === "number" ? strengthW.value : 1.0,
+        stack,
+    }).then((ok) => {
+        showToast(ok ? `Saved LoRA set “${trimmed}”` : "Save failed — see console");
+    });
+}
+
+function applySetToNode(node, set) {
+    const sw = findFindingWidget(node, "lora_stack");
+    if (sw) {
+        const entries = (Array.isArray(set.stack) ? set.stack : [])
+            .filter((e) => e && typeof e.lora_name === "string" && e.lora_name)
+            .slice(0, STACK_MAX)
+            .map((e) => ({
+                lora_name: e.lora_name,
+                strength: typeof e.strength === "number" ? e.strength : 1.0,
+            }));
+        sw._commit(entries, node, false);
+    }
+    const strengthW = findFindingWidget(node, "strength");
+    if (strengthW && typeof set.strength_model === "number") {
+        strengthW._setValue(set.strength_model);
+    }
+    // Set the main LoRA last — its callback triggers refreshNodeUI, which
+    // also resizes the node for the new stack row count.
+    if (set.lora_name) setCurrentLoraName(node, set.lora_name);
+    refreshNodeUI(node);
+    showToast(`Loaded LoRA set “${set.name}”`);
+}
+
+async function openLoadSetPicker(node) {
+    const sets = (await fetchLoraSets()).filter((s) => s && typeof s.name === "string");
+    if (sets.length === 0) {
+        showToast("No saved LoRA sets yet — stack some LoRAs and hit 💾");
+        return;
+    }
+    const byName = new Map(sets.map((s) => [s.name, s]));
+    showPickerModal(sets.map((s) => s.name), null, {
+        title: "📂 Load a LoRA set",
+        placeholder: "Type to filter sets (↑/↓ + Enter)… 🗑 deletes a set.",
+        emptyMsg: "No sets match",
+        onSelect: (selected) => {
+            const set = byName.get(selected);
+            if (set) applySetToNode(node, set);
+        },
+        onDelete: (name, done) => {
+            if (!window.confirm(`Delete LoRA set "${name}"?`)) return;
+            removeLoraSet(name).then((ok) => {
+                if (ok) {
+                    byName.delete(name);
+                    done();
+                } else {
+                    showToast("Delete failed — see console");
+                }
+            });
+        },
+    });
+}
+
+function createSaveSetButton(node) {
+    // Same pill render as createCustomButton, but with dynamic visibility:
+    // hidden (height -4, like the trigger row) until the stack has an entry.
+    const widget = {
+        type: "FINDING_LORA_BUTTON",
+        name: "💾 Save LoRA Set",
+        value: null,
+        options: {},
+        _finding_role: "save_set_btn",
+
+        _visible() {
+            const sw = findFindingWidget(node, "lora_stack");
+            return !!sw && stackEntries(sw).length >= 1;
+        },
+
+        draw(ctx, n, ww, y, _wh) {
+            if (!this._visible()) return;
+            const h = SLOT_H;
+            ctx.fillStyle = "#363636";
+            ctx.fillRect(8, y + 2, ww - 16, h - 4);
+            ctx.strokeStyle = "#555";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(8.5, y + 2.5, ww - 17, h - 5);
+            ctx.fillStyle = "#ddd";
+            ctx.font = "12px Arial";
+            ctx.textBaseline = "middle";
+            ctx.textAlign = "center";
+            ctx.fillText(this.name || "", ww / 2, y + h / 2);
+        },
+
+        computeSize() {
+            return this._visible() ? [0, SLOT_H] : [0, -4];
+        },
+
+        mouse(e, pos, n) {
+            if (e.type !== "pointerdown" && e.type !== "mousedown") return false;
+            if (!this._visible()) return false;
+            saveCurrentSet(node);
+            return true;
+        },
+    };
+    node.widgets.push(widget);
+    return widget;
+}
+
+// =====================================================================
 // Splice helpers
 // =====================================================================
 
@@ -1388,6 +1596,12 @@ app.registerExtension({
             // Yank the framework lora_stack STRING widget and replace with
             // the multi-row stack widget (add rows appear as you stack).
             createStackWidget(node);
+            // LoRA sets: save appears once the stack has an entry; load is
+            // always available.
+            createSaveSetButton(node);
+            createCustomButton(node, "load_set_btn", "📂 Load LoRA Set", () => {
+                openLoadSetPicker(node);
+            });
             // Bottom-of-stack action: clone-and-chain another loader inline.
             const spawnBtn = createSpawnButton(node);
 
@@ -1396,7 +1610,8 @@ app.registerExtension({
 
             // Final order top-to-bottom:
             //   bookmark picker → lora picker → bookmark button → edit button
-            //   → trigger display → strength_model → lora stack → chain button
+            //   → trigger display → strength_model → lora stack → save set
+            //   → load set → chain button
             //
             // The loraPicker has already taken lora_name's slot inside
             // createLoraPicker, so we anchor the rest of the moves off the

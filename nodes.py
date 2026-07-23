@@ -133,6 +133,62 @@ def _parse_stack(raw) -> list:
     return out
 
 
+# --- LoRA set storage ------------------------------------------------
+#
+# A "set" is a saved snapshot of a node's full LoRA config: the main
+# lora_name + strength_model plus the whole stack. Stored beside the
+# bookmarks so users can back up / bulk-edit the same way.
+
+
+def _sets_path() -> str:
+    base = os.path.join(folder_paths.get_user_directory(), "finding-lora")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "lora-sets.json")
+
+
+def _load_sets() -> list:
+    """Return a list of set records:
+    ``[{name, lora_name, strength_model, stack: [{lora_name, strength}, ...]}, ...]``."""
+    path = _sets_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+    if isinstance(data, dict) and "sets" in data:
+        return list(data["sets"])
+    return []
+
+
+def _save_sets(sets: list) -> None:
+    path = _sets_path()
+    payload = {"sets": sets, "version": 1}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
+
+
+def _sanitize_stack_records(raw) -> list:
+    """Coerce a client-supplied stack array into well-formed records."""
+    out = []
+    if isinstance(raw, list):
+        for entry in raw[:MAX_STACK]:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("lora_name")
+            if not name or not isinstance(name, str):
+                continue
+            try:
+                strength = float(entry.get("strength", 1.0))
+            except (TypeError, ValueError):
+                strength = 1.0
+            out.append({"lora_name": name, "strength": strength})
+    return out
+
+
 # --- HTTP routes -----------------------------------------------------
 
 if _HAS_SERVER:
@@ -180,6 +236,55 @@ if _HAS_SERVER:
             bms = [b for b in bms if not (isinstance(b, dict) and b.get("lora_name") == lora_name)]
             _save_bookmarks(bms)
         return web.json_response({"ok": True, "bookmarks": bms})
+
+    @routes.get("/finding-lora/sets/list")
+    async def _list_sets(request):
+        with _LOCK:
+            sets = _load_sets()
+        return web.json_response({"sets": sets})
+
+    @routes.post("/finding-lora/sets/save")
+    async def _save_set(request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        data = data or {}
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return web.json_response({"error": "name required"}, status=400)
+        try:
+            strength = float(data.get("strength_model", 1.0))
+        except (TypeError, ValueError):
+            strength = 1.0
+        record = {
+            "name": name,
+            "lora_name": str(data.get("lora_name") or ""),
+            "strength_model": strength,
+            "stack": _sanitize_stack_records(data.get("stack")),
+        }
+        with _LOCK:
+            sets = _load_sets()
+            # Upsert by name — saving under an existing name overwrites it.
+            sets = [s for s in sets if not (isinstance(s, dict) and s.get("name") == name)]
+            sets.append(record)
+            _save_sets(sets)
+        return web.json_response({"ok": True, "sets": sets})
+
+    @routes.post("/finding-lora/sets/remove")
+    async def _remove_set(request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        name = str((data or {}).get("name") or "").strip()
+        if not name:
+            return web.json_response({"error": "name required"}, status=400)
+        with _LOCK:
+            sets = _load_sets()
+            sets = [s for s in sets if not (isinstance(s, dict) and s.get("name") == name)]
+            _save_sets(sets)
+        return web.json_response({"ok": True, "sets": sets})
 
 
 # --- The node --------------------------------------------------------

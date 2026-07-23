@@ -36,6 +36,7 @@ I haven't seen another LoRA-loader pack do this combination — bookmarks + trig
 
   <img src="chained-nodes.png" alt="Two Finding LoRA loaders side-by-side — the second was spawned by clicking 'Chain another LoRA Loader' on the first; the model line is wired through automatically" width="780">
 - **➕ LoRA stack — up to 10 more LoRAs in the same node.** Below the strength slider, a green **➕ Add another LoRA** row opens the same fuzzy-search picker and adds a stacked LoRA with its own strength. Only the rows in use are shown — one add row at first, growing to a maximum of 10 stacked LoRAs (plus the main one). Each row: click the name to swap it (search included), `◀ ▶` to step the strength, drag between them to scrub, double-click to type a value, `✕` to remove. The stack is applied to the model in order after the main LoRA, and triggers from bookmarked stacked LoRAs are included in the `trigger` output.
+- **💾 LoRA sets — save and recall whole combinations.** Once you've stacked at least one extra LoRA, a **💾 Save LoRA Set** button appears: give the combination a name and the node's full config (main LoRA + strength + entire stack) is saved. **📂 Load LoRA Set** is always visible and opens a searchable picker of your saved sets — pick one and the node reconfigures itself; hover a row's 🗑 to delete a set. Saving under an existing name overwrites it.
 - **🔍 Real fuzzy search built into the picker.** Type in the picker modal to fzf-style fuzzy match across every LoRA in your `loras/` folder. Substring matches always rank above scattered ones — typing `snoys` puts every name containing `snoys` at the top, before scattered subsequence matches sneak past on bonus points.
 
   <img src="lora-picker.png" alt="LoRA picker modal — alphabetical with current selection highlighted, type to fuzzy-search across the whole loras folder" width="640">
@@ -62,6 +63,7 @@ Then:
 - Next time, click **📚 Bookmarks:** to pick straight from your favourites.
 - Click the trigger row to copy the trigger phrase to your clipboard.
 - Click **➕ Add another LoRA** to search for and add up to 10 more LoRAs inside the same node, each with its own strength.
+- Click **💾 Save LoRA Set** to name and save the whole combination; **📂 Load LoRA Set** brings any saved set back with one click.
 - Click **🔗 Chain another LoRA Loader** to drop another copy of the node beside this one and weave it into the model chain automatically.
 
 ---
@@ -97,6 +99,8 @@ This is a **model-only** loader — no `clip` input or output, matching ComfyUI'
 | LoRA Strength | Click `◀ / ▶` to step ±0.01, drag the middle to scrub, double-click for direct entry. |
 | ➕ Add another LoRA | Opens the fuzzy-search picker and adds a stacked LoRA row (up to 10). Only rows in use are shown. |
 | ➕n stack row | Click the name to swap that LoRA (search included). `◀ / ▶` step its strength ±0.01, drag between them to scrub, double-click to type. `✕` removes the row. |
+| 💾 Save LoRA Set | Visible once the stack has at least one entry. Prompts for a name and saves the node's full LoRA config (main + strength + stack). Existing name → overwrite. |
+| 📂 Load LoRA Set | Always visible. Searchable picker of saved sets — selecting one applies the whole config to the node. 🗑 on a row deletes that set (with confirmation). |
 | 🔗 Chain another LoRA Loader | Spawn another copy of the node beside this one and splice it into the model chain. Existing downstream `MODEL` connections are re-routed through the new node automatically. |
 
 ---
@@ -113,6 +117,8 @@ Top 200 results are shown to keep the UI fast even on huge libraries.
 ---
 
 ### Storage
+
+LoRA sets live beside the bookmarks at `<ComfyUI>/user/finding-lora/lora-sets.json` — same deal: a plain JSON file (`{"sets": [{name, lora_name, strength_model, stack: [...]}]}`) you can back up or bulk-edit, restart to pick up direct edits.
 
 Bookmarks are stored as a single JSON file at `<ComfyUI>/user/finding-lora/bookmarks.json`. Format:
 
@@ -132,11 +138,14 @@ Live editable on disk if you want to bulk-import or back up. Restart ComfyUI to 
 
 ### Routes (for the curious)
 
-The pack registers three HTTP routes on ComfyUI's server, namespaced under `/finding-lora/` so they don't clash with anything else:
+The pack registers six HTTP routes on ComfyUI's server, namespaced under `/finding-lora/` so they don't clash with anything else:
 
 - `GET  /finding-lora/list` — returns all bookmarks
 - `POST /finding-lora/add` — `{ lora_name, trigger }` adds or updates a bookmark
 - `POST /finding-lora/remove` — `{ lora_name }` removes a bookmark
+- `GET  /finding-lora/sets/list` — returns all saved LoRA sets
+- `POST /finding-lora/sets/save` — `{ name, lora_name, strength_model, stack }` adds or overwrites a set
+- `POST /finding-lora/sets/remove` — `{ name }` deletes a set
 
 Frontend talks to those, file storage stays server-side.
 
