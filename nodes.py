@@ -9,6 +9,9 @@ Solves the "I have 1000 LoRAs and the dropdown is unusable" problem:
 - A 🔍 button opens a fuzzy-search modal across every LoRA in your folder.
 - The trigger word for the active bookmark renders on a read-only line below
   the LoRA dropdown and is also emitted as a STRING output for prompt wiring.
+- A LoRA stack: up to 10 additional LoRAs, each with its own strength and
+  picker, applied on top of the main one. Serialised as a single JSON string
+  in the ``lora_stack`` input.
 
 Bookmarks persist globally in ``<ComfyUI>/user/finding-lora/bookmarks.json`` —
 shared across every workflow you ever open. Routes are namespaced under
@@ -79,17 +82,55 @@ def _find_bookmark(bookmarks: list, lora_name: str) -> Optional[dict]:
     return None
 
 
-def _trigger_for(lora_name: str) -> str:
-    """Look up the trigger word for ``lora_name``. Empty string if not bookmarked
-    or no trigger saved."""
-    if not lora_name or lora_name == "None":
-        return ""
+def _triggers_for(lora_names: list) -> str:
+    """Collect trigger words for every name in ``lora_names`` (in order),
+    joined with ", ". Names that aren't bookmarked or have no trigger are
+    skipped; duplicates are emitted once."""
     with _LOCK:
         bms = _load_bookmarks()
-    b = _find_bookmark(bms, lora_name)
-    if not b:
-        return ""
-    return str(b.get("trigger") or "").strip()
+    parts = []
+    for name in lora_names:
+        if not name or name == "None":
+            continue
+        b = _find_bookmark(bms, name)
+        trigger = str((b or {}).get("trigger") or "").strip()
+        if trigger and trigger not in parts:
+            parts.append(trigger)
+    return ", ".join(parts)
+
+
+MAX_STACK = 10
+
+
+def _parse_stack(raw) -> list:
+    """Parse the ``lora_stack`` JSON string into ``[(lora_name, strength), ...]``.
+
+    The frontend serialises the stack widget as a JSON array of
+    ``{lora_name, strength}`` records. Anything malformed (old workflows
+    load ``null`` into the slot, hand-edited JSON, etc.) degrades to an
+    empty stack rather than erroring the run.
+    """
+    if not raw or not isinstance(raw, str):
+        return []
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for entry in data[:MAX_STACK]:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("lora_name")
+        if not name or not isinstance(name, str):
+            continue
+        try:
+            strength = float(entry.get("strength", 1.0))
+        except (TypeError, ValueError):
+            strength = 1.0
+        out.append((name, strength))
+    return out
 
 
 # --- HTTP routes -----------------------------------------------------
@@ -163,14 +204,23 @@ class LoraLoaderFindingLora:
                     "default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01,
                     "tooltip": "How strongly to modify the diffusion model.",
                 }),
-            }
+            },
+            "optional": {
+                "lora_stack": ("STRING", {
+                    "default": "[]",
+                    "tooltip": "Up to 10 additional LoRAs applied on top of the main one, "
+                               "each with its own strength. Managed by the stack rows on the "
+                               "node face; stored as JSON.",
+                }),
+            },
         }
 
     RETURN_TYPES = ("MODEL", "STRING")
     RETURN_NAMES = ("model", "trigger")
     OUTPUT_TOOLTIPS = (
-        "The model with the LoRA applied.",
-        "Trigger word/phrase saved against this LoRA's bookmark, or empty if not bookmarked.",
+        "The model with all LoRAs (main + stack) applied.",
+        "Trigger words/phrases saved against the bookmarks of the applied LoRAs "
+        "(main + stack), comma-joined. Empty if none are bookmarked.",
     )
     FUNCTION = "load_lora"
     CATEGORY = "loaders"
@@ -178,32 +228,35 @@ class LoraLoaderFindingLora:
         "Model-only LoRA loader with bookmarks, trigger-word storage, and fuzzy search. "
         "Bookmark your favourite LoRAs (📖), recall them via a secondary dropdown, "
         "associate trigger words / phrases that get emitted as a STRING output, "
-        "and fuzzy-search across thousands of LoRAs (🔍). Bookmarks persist globally."
+        "fuzzy-search across thousands of LoRAs (🔍), and stack up to 10 more LoRAs "
+        "with per-LoRA strengths (➕). Bookmarks persist globally."
     )
 
     def __init__(self):
-        self.loaded_lora = None  # cache last-loaded LoRA state dict (filename, sd)
+        self._lora_cache = {}  # path -> loaded state dict, for every LoRA this node applies
 
-    def load_lora(self, model, lora_name, strength_model):
-        if strength_model == 0:
-            return (model, _trigger_for(lora_name))
+    def load_lora(self, model, lora_name, strength_model, lora_stack="[]"):
+        stack = _parse_stack(lora_stack)
+        all_names = [lora_name] + [name for name, _ in stack]
 
-        lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
-        lora = None
-        if self.loaded_lora is not None:
-            cached_name, cached_sd = self.loaded_lora
-            if cached_name == lora_path:
-                lora = cached_sd
-            else:
-                self.loaded_lora = None
-        if lora is None:
-            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
-            self.loaded_lora = (lora_path, lora)
+        used_paths = set()
+        for name, strength in [(lora_name, strength_model)] + stack:
+            if strength == 0 or not name or name == "None":
+                continue
+            lora_path = folder_paths.get_full_path_or_raise("loras", name)
+            used_paths.add(lora_path)
+            lora = self._lora_cache.get(lora_path)
+            if lora is None:
+                lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+                self._lora_cache[lora_path] = lora
+            model, _ = comfy.sd.load_lora_for_models(
+                model, None, lora, strength, 0,
+            )
 
-        model_lora, _ = comfy.sd.load_lora_for_models(
-            model, None, lora, strength_model, 0,
-        )
-        return (model_lora, _trigger_for(lora_name))
+        # Evict cached state dicts this node no longer references.
+        self._lora_cache = {p: sd for p, sd in self._lora_cache.items() if p in used_paths}
+
+        return (model, _triggers_for(all_names))
 
 
 NODE_CLASS_MAPPINGS = {

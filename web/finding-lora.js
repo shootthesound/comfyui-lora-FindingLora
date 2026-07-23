@@ -11,6 +11,9 @@
 //   ✏️ Edit Trigger Word      ← only visible when active LoRA is bookmarked
 //   🔑 trigger preview line   ← only when a trigger is set
 //   strength_model
+//   ➕ LoRA stack rows         ← up to 10 extra LoRAs w/ per-row strength;
+//                                only as many rows as are in use, plus one
+//                                "add" row while under the cap
 //
 // Bookmarks are stored server-side; this file talks to the Python pack via
 // /finding-lora/list, /finding-lora/add, /finding-lora/remove.
@@ -1057,6 +1060,282 @@ function createStrengthWidget(node) {
 }
 
 // =====================================================================
+// LoRA stack widget
+//
+// Up to STACK_MAX additional LoRAs, each with its own strength, applied on
+// top of the main one. Rendered as one composite widget that draws N rows:
+// one row per stacked LoRA plus a trailing "➕ add" row while under the cap
+// — so a fresh node shows a single add row, and the section grows as you
+// stack. The whole stack serialises as ONE JSON-string value in the
+// "lora_stack" slot, so node.widgets length stays constant no matter how
+// many LoRAs are stacked — positional widgets_values never drifts.
+//
+// Row layout: [➕n  name………]  [◀ 1.00 ▶]  [✕]
+//   - click the name → same picker modal (fuzzy search) to set/change it
+//   - ◀ / ▶ step ±0.01, drag between them to scrub, double-click to type
+//   - ✕ removes the row
+// =====================================================================
+
+const STACK_MAX = 10;
+
+function stackEntries(widget) {
+    // Parse-on-demand with cache keyed on the raw string, so load-time
+    // values (including null from pre-stack workflows) lazily normalise
+    // to a well-formed array without touching widget.value.
+    if (widget._parsedFor !== widget.value) {
+        let arr = [];
+        try {
+            const parsed = JSON.parse(widget.value);
+            if (Array.isArray(parsed)) {
+                arr = parsed
+                    .filter((e) => e && typeof e.lora_name === "string" && e.lora_name)
+                    .slice(0, STACK_MAX)
+                    .map((e) => ({
+                        lora_name: e.lora_name,
+                        strength: typeof e.strength === "number" ? e.strength : 1.0,
+                    }));
+            }
+        } catch (e) { /* malformed / null → empty stack */ }
+        widget._entries = arr;
+        widget._parsedFor = widget.value;
+    }
+    return widget._entries;
+}
+
+function clampStackStrength(v) {
+    const clamped = Math.max(-100, Math.min(100, v));
+    return parseFloat(clamped.toFixed(2));
+}
+
+function createStackWidget(node) {
+    // Yank the framework "lora_stack" STRING text widget and adopt its name
+    // + slot, same pattern as the lora picker and strength widgets.
+    const fw = node.widgets?.find((w) => w.name === "lora_stack");
+    if (!fw) return null;
+    const fwIdx = node.widgets.indexOf(fw);
+    if (fwIdx >= 0) node.widgets.splice(fwIdx, 1);
+
+    const PAD_X = 8;
+    const REMOVE_W = 24;
+    const ARROW_W = 16;
+    const VAL_W = 46;
+    const STRENGTH_W = ARROW_W * 2 + VAL_W;
+
+    const widget = {
+        type: "FINDING_LORA_STACK",
+        name: "lora_stack",
+        value: typeof fw.value === "string" && fw.value ? fw.value : "[]",
+        options: {},
+        _finding_role: "lora_stack",
+        _finding_drag: null,
+        _finding_last_y: 0,
+
+        _commit(entries, n, resize) {
+            this._entries = entries;
+            this.value = JSON.stringify(entries);
+            this._parsedFor = this.value;
+            if (resize) {
+                refreshNodeUI(n);
+            } else {
+                n.setDirtyCanvas(true, true);
+            }
+        },
+
+        _loraList(n) {
+            return findFindingWidget(n, "lora_picker")?.options?.values || [];
+        },
+
+        draw(ctx, n, ww, y, _wh) {
+            // Remember our top edge so mouse() can map pos[1] → row index.
+            this._finding_last_y = y;
+            const entries = stackEntries(this);
+            const sx = ww - PAD_X - REMOVE_W - STRENGTH_W;
+            ctx.textBaseline = "middle";
+
+            for (let i = 0; i < entries.length; i++) {
+                const ry = y + i * SLOT_H;
+
+                ctx.fillStyle = "#1f1f1f";
+                ctx.fillRect(PAD_X, ry + 2, ww - PAD_X * 2, SLOT_H - 4);
+                ctx.strokeStyle = "#555";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(PAD_X + 0.5, ry + 2.5, ww - PAD_X * 2 - 1, SLOT_H - 5);
+
+                // Stack index badge.
+                ctx.fillStyle = "#7a9";
+                ctx.font = "11px Arial";
+                ctx.textAlign = "left";
+                const idxText = `➕${i + 1}`;
+                ctx.fillText(idxText, 14, ry + SLOT_H / 2);
+                const idxW = ctx.measureText(idxText).width + 8;
+
+                // Name, truncated to fit before the strength zone.
+                const nameX = 14 + idxW;
+                const maxW = sx - nameX - 8;
+                const orig = entries[i].lora_name;
+                let display = orig;
+                ctx.fillStyle = "#ddd";
+                ctx.font = "12px Arial";
+                while (ctx.measureText(display + "…").width > maxW && display.length > 4) {
+                    display = display.slice(0, -1);
+                }
+                if (display !== orig) display += "…";
+                ctx.fillText(display, nameX, ry + SLOT_H / 2);
+
+                // Strength: ◀ value ▶
+                ctx.fillStyle = "#aaa";
+                ctx.font = "12px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText("◀", sx + ARROW_W / 2, ry + SLOT_H / 2);
+                ctx.fillText("▶", sx + ARROW_W + VAL_W + ARROW_W / 2, ry + SLOT_H / 2);
+                ctx.fillStyle = "#fff";
+                ctx.fillText(entries[i].strength.toFixed(2), sx + ARROW_W + VAL_W / 2, ry + SLOT_H / 2);
+
+                // Remove.
+                ctx.fillStyle = "#c66";
+                ctx.textAlign = "center";
+                ctx.fillText("✕", ww - PAD_X - REMOVE_W / 2, ry + SLOT_H / 2);
+            }
+
+            // Trailing add row while under the cap.
+            if (entries.length < STACK_MAX) {
+                const ry = y + entries.length * SLOT_H;
+                ctx.fillStyle = "#28322a";
+                ctx.fillRect(PAD_X, ry + 2, ww - PAD_X * 2, SLOT_H - 4);
+                ctx.strokeStyle = "#4a5a4c";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(PAD_X + 0.5, ry + 2.5, ww - PAD_X * 2 - 1, SLOT_H - 5);
+
+                ctx.fillStyle = "#9c9";
+                ctx.font = "12px Arial";
+                ctx.textAlign = "center";
+                const label = entries.length === 0
+                    ? "➕ Add another LoRA"
+                    : `➕ Add another LoRA (${entries.length}/${STACK_MAX} stacked)`;
+                ctx.fillText(label, ww / 2, ry + SLOT_H / 2);
+            }
+        },
+
+        computeSize() {
+            const entries = stackEntries(this);
+            const rows = entries.length + (entries.length < STACK_MAX ? 1 : 0);
+            return [0, rows * SLOT_H];
+        },
+
+        mouse(event, pos, n) {
+            const entries = stackEntries(this);
+            const ww = n.size[0];
+            const x = pos[0];
+            const row = Math.floor((pos[1] - this._finding_last_y) / SLOT_H);
+            const sx = ww - PAD_X - REMOVE_W - STRENGTH_W;
+
+            if (event.type === "pointermove" || event.type === "mousemove") {
+                const drag = this._finding_drag;
+                if (drag && entries[drag.row]) {
+                    const dx = x - drag.startX;
+                    // Same feel as the main strength widget: 1 step per 4 px.
+                    const next = clampStackStrength(drag.startValue + dx * 0.01 * 0.25);
+                    const updated = entries.slice();
+                    updated[drag.row] = { ...updated[drag.row], strength: next };
+                    this._commit(updated, n, false);
+                    return true;
+                }
+                return false;
+            }
+            if (event.type === "pointerup" || event.type === "mouseup") {
+                if (this._finding_drag) {
+                    this._finding_drag = null;
+                    return true;
+                }
+                return false;
+            }
+            if (event.type !== "pointerdown" && event.type !== "mousedown") return false;
+
+            // Add row.
+            if (row === entries.length && entries.length < STACK_MAX) {
+                showPickerModal(this._loraList(n), null, {
+                    title: `➕ Stack LoRA ${entries.length + 1} of ${STACK_MAX}`,
+                    placeholder: "Type to fuzzy-search, or browse alphabetically (↑/↓ + Enter)…",
+                    emptyMsg: "No LoRAs match",
+                    onSelect: (selected) => {
+                        if (!selected) return;
+                        const cur = stackEntries(this);
+                        if (cur.length >= STACK_MAX) return;
+                        this._commit([...cur, { lora_name: selected, strength: 1.0 }], n, true);
+                    },
+                });
+                return true;
+            }
+            if (row < 0 || row >= entries.length) return false;
+
+            // Remove ✕.
+            if (x > ww - PAD_X - REMOVE_W) {
+                const updated = entries.slice();
+                updated.splice(row, 1);
+                this._commit(updated, n, true);
+                return true;
+            }
+
+            // Strength zone.
+            if (x >= sx) {
+                const relX = x - sx;
+                const bump = (delta) => {
+                    const updated = entries.slice();
+                    updated[row] = {
+                        ...updated[row],
+                        strength: clampStackStrength(updated[row].strength + delta),
+                    };
+                    this._commit(updated, n, false);
+                };
+                if (relX < ARROW_W + 4) {
+                    bump(-0.01);
+                } else if (relX > ARROW_W + VAL_W - 4) {
+                    bump(0.01);
+                } else if (event.detail === 2) {
+                    const entered = window.prompt(
+                        `Strength for "${entries[row].lora_name}":`,
+                        String(entries[row].strength)
+                    );
+                    if (entered !== null) {
+                        const parsed = parseFloat(entered);
+                        if (!isNaN(parsed)) {
+                            const updated = entries.slice();
+                            updated[row] = { ...updated[row], strength: clampStackStrength(parsed) };
+                            this._commit(updated, n, false);
+                        }
+                    }
+                    this._finding_drag = null;
+                } else {
+                    this._finding_drag = { row, startX: x, startValue: entries[row].strength };
+                }
+                return true;
+            }
+
+            // Name zone → picker to change this entry.
+            showPickerModal(this._loraList(n), entries[row].lora_name, {
+                title: `🎛 Change stacked LoRA ${row + 1}`,
+                placeholder: "Type to fuzzy-search, or browse alphabetically (↑/↓ + Enter)…",
+                emptyMsg: "No LoRAs match",
+                onSelect: (selected) => {
+                    if (!selected) return;
+                    const cur = stackEntries(this);
+                    if (!cur[row]) return;
+                    const updated = cur.slice();
+                    updated[row] = { ...updated[row], lora_name: selected };
+                    this._commit(updated, n, false);
+                },
+            });
+            return true;
+        },
+    };
+
+    // Re-insert at the framework widget's slot so positional serialization
+    // is unchanged.
+    node.widgets.splice(fwIdx >= 0 ? fwIdx : node.widgets.length, 0, widget);
+    return widget;
+}
+
+// =====================================================================
 // Splice helpers
 // =====================================================================
 
@@ -1106,6 +1385,9 @@ app.registerExtension({
             // Yank the framework strength_model widget and replace with a
             // canvas-drawn equivalent so it shares our text-centring contract.
             createStrengthWidget(node);
+            // Yank the framework lora_stack STRING widget and replace with
+            // the multi-row stack widget (add rows appear as you stack).
+            createStackWidget(node);
             // Bottom-of-stack action: clone-and-chain another loader inline.
             const spawnBtn = createSpawnButton(node);
 
@@ -1114,7 +1396,7 @@ app.registerExtension({
 
             // Final order top-to-bottom:
             //   bookmark picker → lora picker → bookmark button → edit button
-            //   → trigger display → strength_model
+            //   → trigger display → strength_model → lora stack → chain button
             //
             // The loraPicker has already taken lora_name's slot inside
             // createLoraPicker, so we anchor the rest of the moves off the

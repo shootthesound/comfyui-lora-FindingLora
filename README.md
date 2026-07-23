@@ -1,7 +1,7 @@
 <h1 align="center">Finding LoRA — for ComfyUI</h1>
 
 <p align="center">
-  A LoRA loader with <strong>bookmarks</strong>, <strong>trigger-word storage and click-to-copy</strong>, <strong>fuzzy search</strong>, and a <strong>one-click button to drop another loader inline beside this one and wire it into the model chain automatically</strong>.<br>
+  A LoRA loader with <strong>bookmarks</strong>, <strong>trigger-word storage and click-to-copy</strong>, <strong>fuzzy search</strong>, a <strong>built-in stack of up to 10 more LoRAs with per-LoRA strengths</strong>, and a <strong>one-click button to drop another loader inline beside this one and wire it into the model chain automatically</strong>.<br>
   Stop scrolling a thousand-LoRA dropdown. Stop manually re-wiring whenever you want to stack another LoRA.
 </p>
 
@@ -35,6 +35,7 @@ I haven't seen another LoRA-loader pack do this combination — bookmarks + trig
 - **🔗 Chain another LoRA Loader.** A button at the bottom spawns a fresh copy of the node beside the current one and splices it into the model chain. Any downstream `MODEL` connections get re-routed through the new node — `(upstream) → this node → new node → (former downstream)`. Stack as many LoRAs as you want without manual rewiring.
 
   <img src="chained-nodes.png" alt="Two Finding LoRA loaders side-by-side — the second was spawned by clicking 'Chain another LoRA Loader' on the first; the model line is wired through automatically" width="780">
+- **➕ LoRA stack — up to 10 more LoRAs in the same node.** Below the strength slider, a green **➕ Add another LoRA** row opens the same fuzzy-search picker and adds a stacked LoRA with its own strength. Only the rows in use are shown — one add row at first, growing to a maximum of 10 stacked LoRAs (plus the main one). Each row: click the name to swap it (search included), `◀ ▶` to step the strength, drag between them to scrub, double-click to type a value, `✕` to remove. The stack is applied to the model in order after the main LoRA, and triggers from bookmarked stacked LoRAs are included in the `trigger` output.
 - **🔍 Real fuzzy search built into the picker.** Type in the picker modal to fzf-style fuzzy match across every LoRA in your `loras/` folder. Substring matches always rank above scattered ones — typing `snoys` puts every name containing `snoys` at the top, before scattered subsequence matches sneak past on bonus points.
 
   <img src="lora-picker.png" alt="LoRA picker modal — alphabetical with current selection highlighted, type to fuzzy-search across the whole loras folder" width="640">
@@ -60,6 +61,7 @@ Then:
 - Click **📖 Bookmark this LoRA** → optional trigger word entry.
 - Next time, click **📚 Bookmarks:** to pick straight from your favourites.
 - Click the trigger row to copy the trigger phrase to your clipboard.
+- Click **➕ Add another LoRA** to search for and add up to 10 more LoRAs inside the same node, each with its own strength.
 - Click **🔗 Chain another LoRA Loader** to drop another copy of the node beside this one and weave it into the model chain automatically.
 
 ---
@@ -71,9 +73,12 @@ Then:
 - `lora_name` (selected via the picker bar, but stored as a string)
 - `strength_model` (FLOAT, default 1.0) — labelled **LoRA Strength** on the node face
 
+#### Optional
+- `lora_stack` (STRING, JSON) — up to 10 additional LoRAs with per-LoRA strengths, managed by the stack rows on the node face. You never edit the JSON directly; it's the serialised form of the ➕ rows.
+
 #### Outputs
-- `model` (MODEL) — with the LoRA applied
-- `trigger` (STRING) — trigger word/phrase saved against the bookmarked LoRA, or empty string if not bookmarked. Wire into your prompt encoder via a string-concat node to auto-prepend trigger words to your prompt.
+- `model` (MODEL) — with the main LoRA and every stacked LoRA applied, in order
+- `trigger` (STRING) — trigger words/phrases saved against the bookmarks of the applied LoRAs (main + stack), comma-joined; empty string if none are bookmarked. Wire into your prompt encoder via a string-concat node to auto-prepend trigger words to your prompt.
 
 This is a **model-only** loader — no `clip` input or output, matching ComfyUI's stock `LoraLoaderModelOnly` for Klein 9B / Flux 2 / Wan / Z-image and any pipeline where CLIP isn't part of the LoRA chain.
 
@@ -90,6 +95,8 @@ This is a **model-only** loader — no `clip` input or output, matching ComfyUI'
 | ✏️ Edit Trigger Word | Edit the trigger word/phrase for the active bookmark. (When the active LoRA isn't bookmarked yet, the same button reads "Add trigger word (bookmark first)" and offers to bookmark on the spot.) |
 | 🔑 trigger row | Visible only when the active LoRA is bookmarked AND has a trigger saved. Click it to copy the trigger to your clipboard — a small 📋 hint icon sits at the right of the row. |
 | LoRA Strength | Click `◀ / ▶` to step ±0.01, drag the middle to scrub, double-click for direct entry. |
+| ➕ Add another LoRA | Opens the fuzzy-search picker and adds a stacked LoRA row (up to 10). Only rows in use are shown. |
+| ➕n stack row | Click the name to swap that LoRA (search included). `◀ / ▶` step its strength ±0.01, drag between them to scrub, double-click to type. `✕` removes the row. |
 | 🔗 Chain another LoRA Loader | Spawn another copy of the node beside this one and splice it into the model chain. Existing downstream `MODEL` connections are re-routed through the new node automatically. |
 
 ---

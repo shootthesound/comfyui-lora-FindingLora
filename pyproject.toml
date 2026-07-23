@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-finding-lora"
-description = "A LoRA loader with bookmarks, trigger-word storage and click-to-copy, fuzzy search, and a one-click button to drop another loader inline and wire it into the model chain automatically. Stop scrolling a thousand-LoRA dropdown and stop manually re-wiring to stack another LoRA."
-version = "1.0.0"
+description = "A LoRA loader with bookmarks, trigger-word storage and click-to-copy, fuzzy search, a built-in stack of up to 10 more LoRAs with per-LoRA strengths, and a one-click button to drop another loader inline and wire it into the model chain automatically. Stop scrolling a thousand-LoRA dropdown and stop manually re-wiring to stack another LoRA."
+version = "1.1.0"
 license = "MIT"
 authors = [
     { name = "Peter Neill" }
